@@ -1,4 +1,4 @@
-module github.com/davecrighton/firefly-signer
+module github.com/hyperledger/firefly-signer
 
 go 1.23.0
 
