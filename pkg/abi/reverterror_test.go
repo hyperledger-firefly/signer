@@ -326,3 +326,121 @@ func TestRevertErrorSignatureNilEntry(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "", sig)
 }
+
+// --- DecodeRevertError / DecodeRevertErrorCtx ---
+
+func TestDecodeRevertErrorDefaultErrorString(t *testing.T) {
+	revertData := testEncodeError(t,
+		&Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
+		`{"reason":"Not enough Ether provided."}`,
+	)
+	r := ABI{}.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Equal(t, "Error", r.ErrorEntry.Name)
+	assert.Equal(t, `Error("Not enough Ether provided.")`, r.String())
+	assert.Nil(t, r.Cause())
+}
+
+func TestDecodeRevertErrorDefaultPanic(t *testing.T) {
+	revertData := testEncodeError(t,
+		&Entry{Type: Error, Name: "Panic", Inputs: ParameterArray{{Name: "code", Type: "uint256"}}},
+		`{"code":1}`,
+	)
+	r := ABI{}.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Equal(t, "Panic", r.ErrorEntry.Name)
+	assert.Equal(t, `Panic("1")`, r.String())
+	sig, err := r.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "Panic(uint256)", sig)
+}
+
+func TestDecodeRevertErrorCustomError(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{
+		{Name: "available", Type: "uint256"},
+		{Name: "required", Type: "uint256"},
+	}}
+	customABI := ABI{customEntry}
+	revertData := testEncodeError(t, customEntry, `{"available":100,"required":200}`)
+
+	r := customABI.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Equal(t, "InsufficientBalance", r.ErrorEntry.Name)
+	assert.Equal(t, `InsufficientBalance("100","200")`, r.String())
+	sig, err := r.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "InsufficientBalance(uint256,uint256)", sig)
+}
+
+func TestDecodeRevertErrorCustomBeforeBuiltin(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "MyError", Inputs: ParameterArray{{Name: "msg", Type: "string"}}}
+	customABI := ABI{customEntry}
+	revertData := testEncodeError(t, customEntry, `{"msg":"custom message"}`)
+
+	r := customABI.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Equal(t, "MyError", r.ErrorEntry.Name, "custom ABI entries should be tried before builtins")
+}
+
+func TestDecodeRevertErrorNoMatch(t *testing.T) {
+	r := ABI{}.DecodeRevertError([]byte{0x11, 0x22, 0x33, 0x44})
+	assert.Nil(t, r)
+}
+
+func TestDecodeRevertErrorTooShort(t *testing.T) {
+	r := ABI{}.DecodeRevertError([]byte{0x08})
+	assert.Nil(t, r)
+}
+
+func TestDecodeRevertErrorNilData(t *testing.T) {
+	r := ABI{}.DecodeRevertError(nil)
+	assert.Nil(t, r)
+}
+
+func TestDecodeRevertErrorEmptyData(t *testing.T) {
+	r := ABI{}.DecodeRevertError([]byte{})
+	assert.Nil(t, r)
+}
+
+func TestDecodeRevertErrorCtxPassesContext(t *testing.T) {
+	revertData := testEncodeError(t,
+		&Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
+		`{"reason":"with context"}`,
+	)
+	ctx := context.Background()
+	r := ABI{}.DecodeRevertErrorCtx(ctx, revertData)
+	require.NotNil(t, r)
+	assert.Equal(t, `Error("with context")`, r.String())
+}
+
+func TestDecodeRevertErrorSerializeJSON(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "ExampleError", Inputs: ParameterArray{
+		{Name: "param1", Type: "string"},
+		{Name: "param2", Type: "uint256"},
+	}}
+	revertData := testEncodeError(t, customEntry, `{"param1":"test1","param2":12345}`)
+	r := ABI{customEntry}.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+
+	b, err := r.SerializeJSON(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Contains(t, string(b), "test1")
+	assert.Contains(t, string(b), "12345")
+}
+
+func TestDecodeRevertErrorNonErrorEntriesIgnored(t *testing.T) {
+	fnEntry := &Entry{Type: Function, Name: "transfer", Inputs: ParameterArray{
+		{Name: "to", Type: "address"},
+		{Name: "amount", Type: "uint256"},
+	}}
+	r := ABI{fnEntry}.DecodeRevertError([]byte{0x11, 0x22, 0x33, 0x44})
+	assert.Nil(t, r, "function entries should not be tried for error decoding")
+}
+
+// testEncodeError is a helper that ABI-encodes error data for a given entry and JSON args.
+func testEncodeError(t *testing.T, entry *Entry, jsonArgs string) []byte {
+	t.Helper()
+	encoded, err := entry.EncodeCallDataJSON([]byte(jsonArgs))
+	require.NoError(t, err)
+	return encoded
+}

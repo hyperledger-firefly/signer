@@ -21,6 +21,13 @@ import (
 	"strings"
 )
 
+// defaultErrorEntries are the built-in Solidity error types that are always
+// tried when decoding revert data, even if the caller's ABI is empty.
+var defaultErrorEntries = ABI{
+	{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
+	{Type: Error, Name: "Panic", Inputs: ParameterArray{{Name: "code", Type: "uint256"}}},
+}
+
 // RevertError represents a decoded Solidity revert error. For nested errors
 // (where a contract catches a revert and re-throws with the original error
 // embedded in the string), the Nested field links to the inner decoded error,
@@ -30,6 +37,36 @@ type RevertError struct {
 	cv         *ComponentValue // decoded ABI data for this level
 	Prefix     string         // readable text before a nested error
 	Nested     *RevertError   // recursively decoded inner error, nil if none
+}
+
+// DecodeRevertError decodes raw EVM revert data into a RevertError.
+// Returns nil if the data does not match any known error selector.
+func (a ABI) DecodeRevertError(revertData []byte) *RevertError {
+	return a.DecodeRevertErrorCtx(context.Background(), revertData)
+}
+
+// DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError.
+// The ABI's error entries are tried first, followed by the built-in
+// Error(string) and Panic(uint256). Returns nil if no selector matches.
+func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *RevertError {
+	candidates := append(a.errors(), defaultErrorEntries...)
+	for _, e := range candidates {
+		if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
+			return &RevertError{ErrorEntry: e, cv: cv}
+		}
+	}
+	return nil
+}
+
+// errors returns only the Error-type entries from the ABI.
+func (a ABI) errors() ABI {
+	var out ABI
+	for _, e := range a {
+		if e.Type == Error {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // String returns a human-readable representation of the full error chain.
