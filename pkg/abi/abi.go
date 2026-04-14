@@ -378,6 +378,9 @@ func SanitizeBinaryString(raw []byte) string {
 }
 
 func FormatErrorStringCtx(ctx context.Context, e *Entry, cv *ComponentValue) string {
+	if e == nil || cv == nil {
+		return ""
+	}
 	var ok bool
 	var parsed []interface{}
 	if res, err := NewSerializer().

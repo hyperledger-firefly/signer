@@ -170,6 +170,17 @@ func (r *RevertError) String() string {
 	return b.String()
 }
 
+// ErrorString returns the formatted error at this level only, e.g.
+// Error("not enough funds") or MyCustomError("0x1234","-100").
+// Unlike String(), it does not walk the Nested chain — use it when
+// you need the single-level description without recursive unwrapping.
+func (r *RevertError) ErrorString() string {
+	if r == nil {
+		return ""
+	}
+	return FormatErrorStringCtx(context.Background(), r.ErrorEntry, r.cv)
+}
+
 // Signature returns the ABI signature of the error at this level,
 // e.g. "Error(string)" or "AnError(string,uint256)".
 func (r *RevertError) Signature() (string, error) {
