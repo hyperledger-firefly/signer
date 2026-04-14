@@ -444,3 +444,159 @@ func testEncodeError(t *testing.T, entry *Entry, jsonArgs string) []byte {
 	require.NoError(t, err)
 	return encoded
 }
+
+// --- Nested unwrapping (DecodeRevertError with nesting) ---
+
+func TestDecodeRevertErrorSingleNested(t *testing.T) {
+	innerABI := buildErrorStringABI([]byte("inner error message"))
+	outerABI := buildErrorStringABI(append([]byte("outer: "), innerABI...))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Equal(t, "Error", r.ErrorEntry.Name)
+	assert.Equal(t, "outer: ", r.Prefix)
+
+	require.NotNil(t, r.Cause())
+	assert.Equal(t, "Error", r.Cause().ErrorEntry.Name)
+	assert.Nil(t, r.Cause().Cause())
+
+	assert.Equal(t, `outer: Error("inner error message")`, r.String())
+}
+
+func TestDecodeRevertErrorDoubleNested(t *testing.T) {
+	deepABI := buildErrorStringABI([]byte("deepest error"))
+	midABI := buildErrorStringABI(append([]byte("level2: "), deepABI...))
+	outerABI := buildErrorStringABI(append([]byte("level1: "), midABI...))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Equal(t, "level1: ", r.Prefix)
+
+	mid := r.Cause()
+	require.NotNil(t, mid)
+	assert.Equal(t, "level2: ", mid.Prefix)
+
+	leaf := mid.Cause()
+	require.NotNil(t, leaf)
+	assert.Nil(t, leaf.Cause())
+
+	assert.Equal(t, `level1: level2: Error("deepest error")`, r.String())
+	assert.Equal(t, leaf, r.Innermost())
+
+	errs := r.Errors()
+	require.Len(t, errs, 3)
+}
+
+func TestDecodeRevertErrorNestedCustomError(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "MyCustomError", Inputs: ParameterArray{{Type: "bytes"}}}
+	customEncoded := testEncodeError(t, customEntry, `{"0":"0xdeadbeef"}`)
+
+	outerABI := buildErrorStringABI(append([]byte("[404]01d - caught bytes:"), customEncoded...))
+
+	r := ABI{customEntry}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Equal(t, "Error", r.ErrorEntry.Name)
+	assert.Equal(t, "[404]01d - caught bytes:", r.Prefix)
+
+	inner := r.Cause()
+	require.NotNil(t, inner)
+	assert.Equal(t, "MyCustomError", inner.ErrorEntry.Name)
+	assert.Nil(t, inner.Cause())
+
+	sig, err := inner.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "MyCustomError(bytes)", sig)
+
+	assert.Equal(t, `[404]01d - caught bytes:MyCustomError("0xdeadbeef")`, r.String())
+}
+
+func TestDecodeRevertErrorCustomBeforeDefaultNested(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "EarlyErr", Inputs: ParameterArray{{Type: "uint256"}}}
+	customEncoded := testEncodeError(t, customEntry, `{"0":42}`)
+
+	innerErrorABI := buildErrorStringABI([]byte("late-error"))
+	// Custom selector appears before the Error(string) selector
+	payload := append([]byte("head:"), customEncoded...)
+	payload = append(payload, []byte("middle:")...)
+	payload = append(payload, innerErrorABI...)
+	outerABI := buildErrorStringABI(payload)
+
+	r := ABI{customEntry}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Equal(t, "head:", r.Prefix)
+
+	inner := r.Cause()
+	require.NotNil(t, inner)
+	assert.Equal(t, "EarlyErr", inner.ErrorEntry.Name, "first matching selector wins")
+}
+
+func TestDecodeRevertErrorNoNesting(t *testing.T) {
+	outerABI := buildErrorStringABI([]byte("plain error with no nesting"))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Equal(t, "", r.Prefix)
+	assert.Nil(t, r.Cause())
+	assert.Equal(t, `Error("plain error with no nesting")`, r.String())
+}
+
+func TestDecodeRevertErrorMalformedNested(t *testing.T) {
+	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	sel := defaultErr.FunctionSelectorBytes()
+
+	badData := append([]byte("prefix:"), sel...)
+	badData = append(badData, []byte("truncated")...)
+	outerABI := buildErrorStringABI(badData)
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Nil(t, r.Cause(), "malformed nested data should not produce a nested error")
+	assert.Equal(t, "", r.Prefix)
+}
+
+func TestDecodeRevertErrorDepthLimit(t *testing.T) {
+	// Build a chain deeper than maxRevertErrorDepth (10)
+	data := []byte("leaf")
+	for i := 0; i < maxRevertErrorDepth+2; i++ {
+		data = buildErrorStringABI(append([]byte("L:"), data...))
+	}
+
+	r := ABI{}.DecodeRevertError(data)
+	require.NotNil(t, r)
+
+	depth := 0
+	for cur := r; cur != nil; cur = cur.Cause() {
+		depth++
+	}
+	assert.LessOrEqual(t, depth, maxRevertErrorDepth+1, "chain should be capped by depth limit")
+}
+
+func TestDecodeRevertErrorInnermostSerializeJSON(t *testing.T) {
+	innerABI := buildErrorStringABI([]byte("inner value"))
+	outerABI := buildErrorStringABI(append([]byte("prefix:"), innerABI...))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+
+	leaf := r.Innermost()
+	require.NotNil(t, leaf)
+	b, err := leaf.SerializeJSON(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Contains(t, string(b), "inner value")
+}
+
+func TestDecodeRevertErrorNestedSignatures(t *testing.T) {
+	innerABI := buildErrorStringABI([]byte("inner"))
+	outerABI := buildErrorStringABI(append([]byte("prefix:"), innerABI...))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+
+	outerSig, err := r.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "Error(string)", outerSig)
+
+	innerSig, err := r.Cause().Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "Error(string)", innerSig)
+}

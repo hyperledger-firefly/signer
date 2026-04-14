@@ -19,6 +19,8 @@ package abi
 import (
 	"context"
 	"strings"
+
+	"github.com/hyperledger/firefly-common/pkg/log"
 )
 
 // defaultErrorEntries are the built-in Solidity error types that are always
@@ -27,6 +29,8 @@ var defaultErrorEntries = ABI{
 	{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
 	{Type: Error, Name: "Panic", Inputs: ParameterArray{{Name: "code", Type: "uint256"}}},
 }
+
+const maxRevertErrorDepth = 10
 
 // RevertError represents a decoded Solidity revert error. For nested errors
 // (where a contract catches a revert and re-throws with the original error
@@ -39,23 +43,103 @@ type RevertError struct {
 	Nested     *RevertError   // recursively decoded inner error, nil if none
 }
 
-// DecodeRevertError decodes raw EVM revert data into a RevertError.
+// DecodeRevertError decodes raw EVM revert data into a RevertError,
+// recursively unwrapping nested errors embedded in Error(string) values.
 // Returns nil if the data does not match any known error selector.
 func (a ABI) DecodeRevertError(revertData []byte) *RevertError {
 	return a.DecodeRevertErrorCtx(context.Background(), revertData)
 }
 
-// DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError.
+// DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError,
+// recursively unwrapping nested errors embedded in Error(string) values.
 // The ABI's error entries are tried first, followed by the built-in
 // Error(string) and Panic(uint256). Returns nil if no selector matches.
 func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *RevertError {
-	candidates := append(a.errors(), defaultErrorEntries...)
-	for _, e := range candidates {
-		if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
-			return &RevertError{ErrorEntry: e, cv: cv}
+	for _, source := range []ABI{a.errors(), defaultErrorEntries} {
+		for _, e := range source {
+			if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
+				r := &RevertError{ErrorEntry: e, cv: cv}
+				// Only Error(string) is unwrapped for nesting, because the Solidity
+				// catch-and-rethrow pattern (string.concat + string(reason)) always
+				// produces Error(string). Custom errors with string/bytes params that
+				// also embed error data are not yet handled here.
+				if e.Name == "Error" && len(cv.Children) == 1 {
+					if strVal, ok := cv.Children[0].Value.(string); ok {
+						r.unwrapNested(ctx, a.selectorMap(), strVal, 0)
+					}
+				}
+				return r
+			}
 		}
 	}
 	return nil
+}
+
+type selectorKey = [4]byte
+
+// selectorMap builds a lookup of 4-byte selectors for all error entries in
+// the ABI plus the builtins.
+func (a ABI) selectorMap() map[selectorKey]*Entry {
+	selectors := make(map[selectorKey]*Entry)
+	var key selectorKey
+	for _, source := range []ABI{a.errors(), defaultErrorEntries} {
+		for _, e := range source {
+			sel := e.FunctionSelectorBytes()
+			if len(sel) >= 4 {
+				copy(key[:], sel[:4])
+				if _, exists := selectors[key]; !exists {
+					selectors[key] = e
+				}
+			}
+		}
+	}
+	return selectors
+}
+
+// unwrapNested scans a decoded string value for an embedded ABI error selector.
+// If found, it populates r.Prefix and r.Nested to form the recursive chain.
+func (r *RevertError) unwrapNested(ctx context.Context, selectors map[selectorKey]*Entry, s string, depth int) {
+	if depth >= maxRevertErrorDepth {
+		return
+	}
+
+	raw := []byte(s)
+	idx, entry := findSelector(raw, selectors)
+	if idx < 0 {
+		return
+	}
+
+	cv, err := entry.DecodeCallDataCtx(ctx, raw[idx:])
+	if err != nil {
+		log.L(ctx).Debugf("Could not decode nested revert at depth %d: %s", depth, err)
+		return
+	}
+
+	nested := &RevertError{ErrorEntry: entry, cv: cv}
+	r.Prefix = SanitizeBinaryString(raw[:idx])
+	r.Nested = nested
+
+	// If the nested error is also Error(string), keep unwrapping
+	if entry.Name == "Error" && len(cv.Children) == 1 {
+		if strVal, ok := cv.Children[0].Value.(string); ok {
+			nested.unwrapNested(ctx, selectors, strVal, depth+1)
+		}
+	}
+}
+
+// findSelector scans raw bytes for the first occurrence of a known 4-byte error selector.
+func findSelector(raw []byte, selectors map[selectorKey]*Entry) (int, *Entry) {
+	if len(raw) < 4 {
+		return -1, nil
+	}
+	var key selectorKey
+	for i := 0; i <= len(raw)-4; i++ {
+		copy(key[:], raw[i:i+4])
+		if e, ok := selectors[key]; ok {
+			return i, e
+		}
+	}
+	return -1, nil
 }
 
 // errors returns only the Error-type entries from the ABI.
