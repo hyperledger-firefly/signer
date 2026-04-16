@@ -62,7 +62,8 @@ func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *Rever
 				// Only Error(string) is unwrapped for nesting, because the Solidity
 				// catch-and-rethrow pattern (string.concat + string(reason)) always
 				// produces Error(string). Custom errors with string/bytes params that
-				// also embed error data are not yet handled here.
+				// also embed error data are not yet handled since there is a high liklihood
+				//that they are not intended to carry error data.
 				if e.Name == "Error" && len(cv.Children) == 1 {
 					if strVal, ok := cv.Children[0].Value.(string); ok {
 						r.unwrapNested(ctx, a.selectorMap(), strVal, 0)
@@ -97,7 +98,7 @@ func (a ABI) selectorMap() map[selectorKey]*Entry {
 }
 
 // unwrapNested scans a decoded string value for an embedded ABI error selector.
-// If found, it populates r.Prefix and r.Nested to form the recursive chain.
+// If found, it populates r.Prefix and r.Cause to form the recursive chain.
 func (r *RevertError) unwrapNested(ctx context.Context, selectors map[selectorKey]*Entry, s string, depth int) {
 	if depth >= maxRevertErrorDepth {
 		return
@@ -172,7 +173,7 @@ func (r *RevertError) String() string {
 
 // ErrorString returns the formatted error at this level only, e.g.
 // Error("not enough funds") or MyCustomError("0x1234","-100").
-// Unlike String(), it does not walk the Nested chain — use it when
+// Unlike String(), it does not walk the Cause chain — use it when
 // you need the single-level description without recursive unwrapping.
 func (r *RevertError) ErrorString() string {
 	if r == nil {
@@ -191,8 +192,7 @@ func (r *RevertError) Signature() (string, error) {
 }
 
 // SerializeJSON serializes the decoded error data at this level using
-// the provided Serializer. This is most useful on the Innermost() error
-// where the data is cleanly structured.
+// the provided Serializer.
 func (r *RevertError) SerializeJSON(ctx context.Context, s *Serializer) ([]byte, error) {
 	if r == nil || r.cv == nil {
 		return nil, nil
@@ -204,7 +204,7 @@ func (r *RevertError) SerializeJSON(ctx context.Context, s *Serializer) ([]byte,
 }
 
 // Cause returns the next error in the chain (one level deeper), or nil
-// at the leaf. Analogous to Java's Throwable.getCause().
+// at the leaf.
 func (r *RevertError) GetCause() *RevertError {
 	if r == nil {
 		return nil
