@@ -34,13 +34,13 @@ const maxRevertErrorDepth = 10
 
 // RevertError represents a decoded Solidity revert error. For nested errors
 // (where a contract catches a revert and re-throws with the original error
-// embedded in the string), the Nested field links to the inner decoded error,
+// embedded in the string), the Cause field links to the inner decoded error,
 // forming a recursive chain.
 type RevertError struct {
-	ErrorEntry *Entry         // the matched ABI error entry at this level
+	ErrorEntry *Entry          // the matched ABI error entry at this level
 	cv         *ComponentValue // decoded ABI data for this level
-	Prefix     string         // readable text before a nested error
-	Nested     *RevertError   // recursively decoded inner error, nil if none
+	Prefix     string          // readable text before a nested error
+	Cause      *RevertError    // recursively decoded inner error, nil if none
 }
 
 // DecodeRevertError decodes raw EVM revert data into a RevertError,
@@ -115,14 +115,14 @@ func (r *RevertError) unwrapNested(ctx context.Context, selectors map[selectorKe
 		return
 	}
 
-	nested := &RevertError{ErrorEntry: entry, cv: cv}
+	cause := &RevertError{ErrorEntry: entry, cv: cv}
 	r.Prefix = SanitizeBinaryString(raw[:idx])
-	r.Nested = nested
+	r.Cause = cause
 
 	// If the nested error is also Error(string), keep unwrapping
 	if entry.Name == "Error" && len(cv.Children) == 1 {
 		if strVal, ok := cv.Children[0].Value.(string); ok {
-			nested.unwrapNested(ctx, selectors, strVal, depth+1)
+			cause.unwrapNested(ctx, selectors, strVal, depth+1)
 		}
 	}
 }
@@ -162,8 +162,8 @@ func (r *RevertError) String() string {
 	}
 	var b strings.Builder
 	b.WriteString(r.Prefix)
-	if r.Nested != nil {
-		b.WriteString(r.Nested.String())
+	if r.Cause != nil {
+		b.WriteString(r.Cause.String())
 	} else {
 		b.WriteString(FormatErrorStringCtx(context.Background(), r.ErrorEntry, r.cv))
 	}
@@ -205,11 +205,11 @@ func (r *RevertError) SerializeJSON(ctx context.Context, s *Serializer) ([]byte,
 
 // Cause returns the next error in the chain (one level deeper), or nil
 // at the leaf. Analogous to Java's Throwable.getCause().
-func (r *RevertError) Cause() *RevertError {
+func (r *RevertError) GetCause() *RevertError {
 	if r == nil {
 		return nil
 	}
-	return r.Nested
+	return r.Cause
 }
 
 // Innermost walks the chain to return the deepest RevertError — the
@@ -219,8 +219,8 @@ func (r *RevertError) Innermost() *RevertError {
 		return nil
 	}
 	cur := r
-	for cur.Nested != nil {
-		cur = cur.Nested
+	for cur.Cause != nil {
+		cur = cur.Cause
 	}
 	return cur
 }
@@ -232,7 +232,7 @@ func (r *RevertError) Errors() []*RevertError {
 		return nil
 	}
 	var result []*RevertError
-	for cur := r; cur != nil; cur = cur.Nested {
+	for cur := r; cur != nil; cur = cur.Cause {
 		result = append(result, cur)
 	}
 	return result

@@ -58,7 +58,7 @@ func TestRevertErrorNilSerializeJSON(t *testing.T) {
 
 func TestRevertErrorNilCause(t *testing.T) {
 	var r *RevertError
-	assert.Nil(t, r.Cause())
+	assert.Nil(t, r.GetCause())
 }
 
 func TestRevertErrorNilInnermost(t *testing.T) {
@@ -110,7 +110,7 @@ func TestRevertErrorSingleCause(t *testing.T) {
 	entry := &Entry{Type: Error, Name: "AnError", Inputs: ParameterArray{{Name: "message", Type: "string"}}}
 	cv := decodeTestError(t, entry, `{"message":"something went wrong"}`)
 	r := &RevertError{ErrorEntry: entry, cv: cv}
-	assert.Nil(t, r.Cause())
+	assert.Nil(t, r.GetCause())
 }
 
 func TestRevertErrorSingleInnermost(t *testing.T) {
@@ -146,7 +146,7 @@ func TestRevertErrorMultipleParams(t *testing.T) {
 	assert.Equal(t, `ExampleError("test1","12345")`, r.String())
 }
 
-// --- Two-level nested error ---
+// --- Two-levelCause error ---
 
 func TestRevertErrorNestedTwoLevelString(t *testing.T) {
 	innerEntry := &Entry{Type: Error, Name: "AnError", Inputs: ParameterArray{{Name: "message", Type: "string"}}}
@@ -159,7 +159,7 @@ func TestRevertErrorNestedTwoLevelString(t *testing.T) {
 		ErrorEntry: outerEntry,
 		cv:         outerCV,
 		Prefix:     "[404]caught bytes",
-		Nested:     inner,
+		Cause:      inner,
 	}
 	assert.Equal(t, `[404]caught bytesAnError("I am an error")`, outer.String())
 }
@@ -173,7 +173,7 @@ func TestRevertErrorNestedTwoLevelSignatures(t *testing.T) {
 	outer := &RevertError{
 		ErrorEntry: outerEntry,
 		Prefix:     "[404]caught bytes",
-		Nested:     inner,
+		Cause:      inner,
 	}
 
 	outerSig, err := outer.Signature()
@@ -191,10 +191,10 @@ func TestRevertErrorNestedTwoLevelCause(t *testing.T) {
 	inner := &RevertError{ErrorEntry: innerEntry, cv: innerCV}
 
 	outerEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Nested: inner}
+	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Cause: inner}
 
-	assert.Equal(t, inner, outer.Cause())
-	assert.Nil(t, inner.Cause())
+	assert.Equal(t, inner, outer.GetCause())
+	assert.Nil(t, inner.GetCause())
 }
 
 func TestRevertErrorNestedTwoLevelInnermost(t *testing.T) {
@@ -203,7 +203,7 @@ func TestRevertErrorNestedTwoLevelInnermost(t *testing.T) {
 	inner := &RevertError{ErrorEntry: innerEntry, cv: innerCV}
 
 	outerEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Nested: inner}
+	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Cause: inner}
 
 	assert.Equal(t, inner, outer.Innermost())
 	assert.Equal(t, inner, inner.Innermost())
@@ -215,7 +215,7 @@ func TestRevertErrorNestedTwoLevelErrors(t *testing.T) {
 	inner := &RevertError{ErrorEntry: innerEntry, cv: innerCV}
 
 	outerEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Nested: inner}
+	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "[404]caught bytes", Cause: inner}
 
 	errs := outer.Errors()
 	require.Len(t, errs, 2)
@@ -230,14 +230,14 @@ func TestRevertErrorNestedTwoLevelSerializeJSONInnermost(t *testing.T) {
 
 	outerEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
 	outerCV := decodeTestError(t, outerEntry, `{"reason":"raw bytes here"}`)
-	outer := &RevertError{ErrorEntry: outerEntry, cv: outerCV, Prefix: "[404]caught bytes", Nested: inner}
+	outer := &RevertError{ErrorEntry: outerEntry, cv: outerCV, Prefix: "[404]caught bytes", Cause: inner}
 
 	b, err := outer.Innermost().SerializeJSON(context.Background(), nil)
 	assert.NoError(t, err)
 	assert.Contains(t, string(b), "I am an error")
 }
 
-// --- Three-level nested error ---
+// --- Three-levelCause error ---
 
 func TestRevertErrorNestedThreeLevelString(t *testing.T) {
 	leafEntry := &Entry{Type: Error, Name: "RootCause", Inputs: ParameterArray{{Name: "detail", Type: "string"}}}
@@ -245,10 +245,10 @@ func TestRevertErrorNestedThreeLevelString(t *testing.T) {
 	leaf := &RevertError{ErrorEntry: leafEntry, cv: leafCV}
 
 	middleEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	middle := &RevertError{ErrorEntry: middleEntry, Prefix: "middleware: ", Nested: leaf}
+	middle := &RevertError{ErrorEntry: middleEntry, Prefix: "middleware: ", Cause: leaf}
 
 	outerEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "gateway: ", Nested: middle}
+	outer := &RevertError{ErrorEntry: outerEntry, Prefix: "gateway: ", Cause: middle}
 
 	assert.Equal(t, `gateway: middleware: RootCause("the real problem")`, outer.String())
 }
@@ -258,8 +258,8 @@ func TestRevertErrorNestedThreeLevelInnermost(t *testing.T) {
 	leafCV := decodeTestError(t, leafEntry, `{"detail":"the real problem"}`)
 	leaf := &RevertError{ErrorEntry: leafEntry, cv: leafCV}
 
-	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "middleware: ", Nested: leaf}
-	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "gateway: ", Nested: middle}
+	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "middleware: ", Cause: leaf}
+	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "gateway: ", Cause: middle}
 
 	assert.Equal(t, leaf, outer.Innermost())
 }
@@ -269,8 +269,8 @@ func TestRevertErrorNestedThreeLevelErrors(t *testing.T) {
 	leafCV := decodeTestError(t, leafEntry, `{"detail":"the real problem"}`)
 	leaf := &RevertError{ErrorEntry: leafEntry, cv: leafCV}
 
-	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "middleware: ", Nested: leaf}
-	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "gateway: ", Nested: middle}
+	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "middleware: ", Cause: leaf}
+	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Prefix: "gateway: ", Cause: middle}
 
 	errs := outer.Errors()
 	require.Len(t, errs, 3)
@@ -284,12 +284,12 @@ func TestRevertErrorNestedThreeLevelCauseChain(t *testing.T) {
 	leafCV := decodeTestError(t, leafEntry, `{"detail":"the real problem"}`)
 	leaf := &RevertError{ErrorEntry: leafEntry, cv: leafCV}
 
-	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Nested: leaf}
-	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Nested: middle}
+	middle := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Cause: leaf}
+	outer := &RevertError{ErrorEntry: &Entry{Type: Error, Name: "Error"}, Cause: middle}
 
-	assert.Equal(t, middle, outer.Cause())
-	assert.Equal(t, leaf, outer.Cause().Cause())
-	assert.Nil(t, outer.Cause().Cause().Cause())
+	assert.Equal(t, middle, outer.GetCause())
+	assert.Equal(t, leaf, outer.GetCause().GetCause())
+	assert.Nil(t, outer.GetCause().GetCause().GetCause())
 }
 
 // --- SerializeJSON with custom serializer ---
@@ -315,7 +315,7 @@ func TestRevertErrorEmptyPrefix(t *testing.T) {
 	outer := &RevertError{
 		ErrorEntry: &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
 		Prefix:     "",
-		Nested:     inner,
+		Cause:      inner,
 	}
 	assert.Equal(t, `AnError("direct")`, outer.String())
 }
@@ -338,7 +338,7 @@ func TestDecodeRevertErrorDefaultErrorString(t *testing.T) {
 	require.NotNil(t, r)
 	assert.Equal(t, "Error", r.ErrorEntry.Name)
 	assert.Equal(t, `Error("Not enough Ether provided.")`, r.String())
-	assert.Nil(t, r.Cause())
+	assert.Nil(t, r.GetCause())
 }
 
 func TestDecodeRevertErrorDefaultPanic(t *testing.T) {
@@ -445,7 +445,7 @@ func testEncodeError(t *testing.T, entry *Entry, jsonArgs string) []byte {
 	return encoded
 }
 
-// --- Nested unwrapping (DecodeRevertError with nesting) ---
+// ---Cause unwrapping (DecodeRevertError with nesting) ---
 
 func TestDecodeRevertErrorSingleNested(t *testing.T) {
 	innerABI := buildErrorStringABI([]byte("inner error message"))
@@ -456,9 +456,9 @@ func TestDecodeRevertErrorSingleNested(t *testing.T) {
 	assert.Equal(t, "Error", r.ErrorEntry.Name)
 	assert.Equal(t, "outer: ", r.Prefix)
 
-	require.NotNil(t, r.Cause())
-	assert.Equal(t, "Error", r.Cause().ErrorEntry.Name)
-	assert.Nil(t, r.Cause().Cause())
+	require.NotNil(t, r.GetCause())
+	assert.Equal(t, "Error", r.GetCause().ErrorEntry.Name)
+	assert.Nil(t, r.GetCause().GetCause())
 
 	assert.Equal(t, `outer: Error("inner error message")`, r.String())
 }
@@ -472,13 +472,13 @@ func TestDecodeRevertErrorDoubleNested(t *testing.T) {
 	require.NotNil(t, r)
 	assert.Equal(t, "level1: ", r.Prefix)
 
-	mid := r.Cause()
+	mid := r.GetCause()
 	require.NotNil(t, mid)
 	assert.Equal(t, "level2: ", mid.Prefix)
 
-	leaf := mid.Cause()
+	leaf := mid.GetCause()
 	require.NotNil(t, leaf)
-	assert.Nil(t, leaf.Cause())
+	assert.Nil(t, leaf.GetCause())
 
 	assert.Equal(t, `level1: level2: Error("deepest error")`, r.String())
 	assert.Equal(t, leaf, r.Innermost())
@@ -498,10 +498,10 @@ func TestDecodeRevertErrorNestedCustomError(t *testing.T) {
 	assert.Equal(t, "Error", r.ErrorEntry.Name)
 	assert.Equal(t, "[404]01d - caught bytes:", r.Prefix)
 
-	inner := r.Cause()
+	inner := r.GetCause()
 	require.NotNil(t, inner)
 	assert.Equal(t, "MyCustomError", inner.ErrorEntry.Name)
-	assert.Nil(t, inner.Cause())
+	assert.Nil(t, inner.GetCause())
 
 	sig, err := inner.Signature()
 	assert.NoError(t, err)
@@ -525,7 +525,7 @@ func TestDecodeRevertErrorCustomBeforeDefaultNested(t *testing.T) {
 	require.NotNil(t, r)
 	assert.Equal(t, "head:", r.Prefix)
 
-	inner := r.Cause()
+	inner := r.GetCause()
 	require.NotNil(t, inner)
 	assert.Equal(t, "EarlyErr", inner.ErrorEntry.Name, "first matching selector wins")
 }
@@ -536,7 +536,7 @@ func TestDecodeRevertErrorNoNesting(t *testing.T) {
 	r := ABI{}.DecodeRevertError(outerABI)
 	require.NotNil(t, r)
 	assert.Equal(t, "", r.Prefix)
-	assert.Nil(t, r.Cause())
+	assert.Nil(t, r.GetCause())
 	assert.Equal(t, `Error("plain error with no nesting")`, r.String())
 }
 
@@ -550,7 +550,7 @@ func TestDecodeRevertErrorMalformedNested(t *testing.T) {
 
 	r := ABI{}.DecodeRevertError(outerABI)
 	require.NotNil(t, r)
-	assert.Nil(t, r.Cause(), "malformed nested data should not produce a nested error")
+	assert.Nil(t, r.GetCause(), "malformedCause data should not produce aCause error")
 	assert.Equal(t, "", r.Prefix)
 }
 
@@ -565,7 +565,7 @@ func TestDecodeRevertErrorDepthLimit(t *testing.T) {
 	require.NotNil(t, r)
 
 	depth := 0
-	for cur := r; cur != nil; cur = cur.Cause() {
+	for cur := r; cur != nil; cur = cur.GetCause() {
 		depth++
 	}
 	assert.LessOrEqual(t, depth, maxRevertErrorDepth+1, "chain should be capped by depth limit")
@@ -596,7 +596,7 @@ func TestDecodeRevertErrorNestedSignatures(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "Error(string)", outerSig)
 
-	innerSig, err := r.Cause().Signature()
+	innerSig, err := r.GetCause().Signature()
 	assert.NoError(t, err)
 	assert.Equal(t, "Error(string)", innerSig)
 }
