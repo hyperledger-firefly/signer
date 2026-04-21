@@ -34,13 +34,13 @@ const maxRevertErrorDepth = 10
 
 // RevertError represents a decoded Solidity revert error. For nested errors
 // (where a contract catches a revert and re-throws with the original error
-// embedded in the string), the Cause field links to the inner decoded error,
-// forming a recursive chain.
+// embedded in the string), the InnerError field links to the inner decoded
+// error, forming a recursive chain.
 type RevertError struct {
-	ErrorEntry *Entry          // the matched ABI error entry at this level
-	cv         *ComponentValue // decoded ABI data for this level
-	Prefix     string          // readable text before a nested error
-	Cause      *RevertError    // recursively decoded inner error, nil if none
+	ErrorEntry *Entry          `ffstruct:"RevertError" json:"errorEntry,omitempty"` // the matched ABI error entry at this level
+	cv         *ComponentValue // decoded ABI data for this level (unexported)
+	Prefix     string          `ffstruct:"RevertError" json:"prefix,omitempty"`     // readable text before the inner error
+	InnerError *RevertError    `ffstruct:"RevertError" json:"innerError,omitempty"` // recursively decoded inner error, nil if none
 }
 
 // DecodeRevertError decodes raw EVM revert data into a RevertError,
@@ -66,7 +66,7 @@ func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *Rever
 				//that they are not intended to carry error data.
 				if e.Name == "Error" && len(cv.Children) == 1 {
 					if strVal, ok := cv.Children[0].Value.(string); ok {
-						r.unwrapNested(ctx, a.selectorMap(), strVal, 0)
+						r.unwrapInnerError(ctx, a.selectorMap(), strVal, 0)
 					}
 				}
 				return r
@@ -97,9 +97,9 @@ func (a ABI) selectorMap() map[selectorKey]*Entry {
 	return selectors
 }
 
-// unwrapNested scans a decoded string value for an embedded ABI error selector.
-// If found, it populates r.Prefix and r.Cause to form the recursive chain.
-func (r *RevertError) unwrapNested(ctx context.Context, selectors map[selectorKey]*Entry, s string, depth int) {
+// unwrapInnerError scans a decoded string value for an embedded ABI error selector.
+// If found, it populates r.Prefix and r.InnerError to form the recursive chain.
+func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[selectorKey]*Entry, s string, depth int) {
 	if depth >= maxRevertErrorDepth {
 		return
 	}
@@ -112,18 +112,18 @@ func (r *RevertError) unwrapNested(ctx context.Context, selectors map[selectorKe
 
 	cv, err := entry.DecodeCallDataCtx(ctx, raw[idx:])
 	if err != nil {
-		log.L(ctx).Debugf("Could not decode nested revert at depth %d: %s", depth, err)
+		log.L(ctx).Debugf("Could not decode inner error at depth %d: %s", depth, err)
 		return
 	}
 
-	cause := &RevertError{ErrorEntry: entry, cv: cv}
+	inner := &RevertError{ErrorEntry: entry, cv: cv}
 	r.Prefix = SanitizeBinaryString(raw[:idx])
-	r.Cause = cause
+	r.InnerError = inner
 
-	// If the nested error is also Error(string), keep unwrapping
+	// If the inner error is also Error(string), keep unwrapping
 	if entry.Name == "Error" && len(cv.Children) == 1 {
 		if strVal, ok := cv.Children[0].Value.(string); ok {
-			cause.unwrapNested(ctx, selectors, strVal, depth+1)
+			inner.unwrapInnerError(ctx, selectors, strVal, depth+1)
 		}
 	}
 }
@@ -163,8 +163,8 @@ func (r *RevertError) String() string {
 	}
 	var b strings.Builder
 	b.WriteString(r.Prefix)
-	if r.Cause != nil {
-		b.WriteString(r.Cause.String())
+	if r.InnerError != nil {
+		b.WriteString(r.InnerError.String())
 	} else {
 		b.WriteString(FormatErrorStringCtx(context.Background(), r.ErrorEntry, r.cv))
 	}
@@ -203,13 +203,13 @@ func (r *RevertError) SerializeJSON(ctx context.Context, s *Serializer) ([]byte,
 	return s.SerializeJSONCtx(ctx, r.cv)
 }
 
-// Cause returns the next error in the chain (one level deeper), or nil
+// GetInnerError returns the next error in the chain (one level deeper), or nil
 // at the leaf.
-func (r *RevertError) GetCause() *RevertError {
+func (r *RevertError) GetInnerError() *RevertError {
 	if r == nil {
 		return nil
 	}
-	return r.Cause
+	return r.InnerError
 }
 
 // Innermost walks the chain to return the deepest RevertError — the
@@ -219,8 +219,8 @@ func (r *RevertError) Innermost() *RevertError {
 		return nil
 	}
 	cur := r
-	for cur.Cause != nil {
-		cur = cur.Cause
+	for cur.InnerError != nil {
+		cur = cur.InnerError
 	}
 	return cur
 }
@@ -232,7 +232,7 @@ func (r *RevertError) Errors() []*RevertError {
 		return nil
 	}
 	var result []*RevertError
-	for cur := r; cur != nil; cur = cur.Cause {
+	for cur := r; cur != nil; cur = cur.InnerError {
 		result = append(result, cur)
 	}
 	return result
