@@ -1162,19 +1162,19 @@ func buildErrorStringABI(msgBytes []byte) []byte {
 	return data
 }
 
-func TestUnwrapErrorStringPlainError(t *testing.T) {
+func TestErrorStringUnwrapPlainError(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a0" +
 			"0000000000000000000000000000000000000000000000000000000000000020" +
 			"000000000000000000000000000000000000000000000000000000000000001a" +
 			"4e6f7420656e6f7567682045746865722070726f76696465642e000000000000")
 
-	result, ok := ABI{}.UnwrapErrorString(revertData)
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.Equal(t, `Error("Not enough Ether provided.")`, result)
 }
 
-func TestUnwrapErrorStringSingleNested(t *testing.T) {
+func TestErrorStringUnwrapSingleNested(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a00000000000000000000000000000000000000000000000000000000000000020" +
 			"000000000000000000000000000000000000000000000000000000000000006b" +
@@ -1185,12 +1185,12 @@ func TestUnwrapErrorStringSingleNested(t *testing.T) {
 			"696e6e6572206572726f72206d65737361676500000000000000000000000000" +
 			"000000000000000000000000000000000000000000")
 
-	result, ok := ABI{}.UnwrapErrorString(revertData)
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.Equal(t, `outer: Error("inner error message")`, result)
 }
 
-func TestUnwrapErrorStringDoubleNested(t *testing.T) {
+func TestErrorStringUnwrapDoubleNested(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a0" +
 			"0000000000000000000000000000000000000000000000000000000000000020" +
@@ -1205,12 +1205,12 @@ func TestUnwrapErrorStringDoubleNested(t *testing.T) {
 			"000000000000000000000000000000000000000000000000000000000000000d" +
 			"64656570657374206572726f720000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
 
-	result, ok := ABI{}.UnwrapErrorString(revertData)
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.Equal(t, `level1: level2: Error("deepest error")`, result)
 }
 
-func TestUnwrapErrorStringNestedCustomError(t *testing.T) {
+func TestErrorStringUnwrapNestedCustomError(t *testing.T) {
 	customABI := ABI{
 		{Type: Error, Name: "MyCustomError", Inputs: ParameterArray{{Type: "bytes"}}},
 	}
@@ -1227,46 +1227,46 @@ func TestUnwrapErrorStringNestedCustomError(t *testing.T) {
 			"deadbeef00000000000000000000000000000000000000000000000000000000" +
 			"00000000")
 
-	// Without the custom ABI, the nested section can't be decoded — the
+	// Without the custom ABI the inner error can't be decoded — the
 	// outer Error(string) is formatted directly (binary content included)
-	result, ok := ABI{}.UnwrapErrorString(revertData)
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.True(t, strings.HasPrefix(result, `Error("[404]01d`))
 
-	// With the custom ABI, the nested error is decoded
-	result, ok = customABI.UnwrapErrorString(revertData)
+	// With the custom ABI the inner error is decoded
+	result, ok = customABI.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.Equal(t, `[404]01d - caught bytes:MyCustomError("0xdeadbeef")`, result)
 }
 
-func TestUnwrapErrorStringUnknownSelector(t *testing.T) {
+func TestErrorStringUnwrapUnknownSelector(t *testing.T) {
 	// Unknown top-level selector
-	_, ok := ABI{}.UnwrapErrorString([]byte{0x11, 0x22, 0x33, 0x44})
+	_, ok := ABI{}.ErrorString([]byte{0x11, 0x22, 0x33, 0x44}, ErrorFormatOption{Unwrap: true})
 	assert.False(t, ok)
 }
 
-func TestUnwrapErrorStringMalformedNestedABI(t *testing.T) {
+func TestErrorStringUnwrapMalformedInnerABI(t *testing.T) {
 	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
 	sel := defaultErr.FunctionSelectorBytes()
 
 	badData := "prefix:" + string(sel) + "truncated"
 	outerABI := buildErrorStringABI([]byte(badData))
 
-	// Malformed nested data can't be decoded, so the outer Error(string)
+	// Malformed inner data can't be decoded, so the outer Error(string)
 	// is formatted directly with the raw string content
-	result, ok := ABI{}.UnwrapErrorString(outerABI)
+	result, ok := ABI{}.ErrorString(outerABI, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.True(t, strings.HasPrefix(result, "Error("))
 }
 
-func TestUnwrapErrorStringDepthLimit(t *testing.T) {
+func TestErrorStringUnwrapDepthLimit(t *testing.T) {
 	// Build a chain deeper than maxRevertErrorDepth (10)
 	data := []byte("leaf")
 	for i := 0; i < maxRevertErrorDepth+2; i++ {
 		data = buildErrorStringABI(append([]byte("L:"), data...))
 	}
 
-	result, ok := ABI{}.UnwrapErrorString(data)
+	result, ok := ABI{}.ErrorString(data, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 
 	// The chain should be capped — the leaf should not be fully unwrapped
@@ -1274,7 +1274,7 @@ func TestUnwrapErrorStringDepthLimit(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
-func TestUnwrapErrorStringCustomBeforeDefaultError(t *testing.T) {
+func TestErrorStringUnwrapCustomBeforeDefault(t *testing.T) {
 	customABI := ABI{
 		{Type: Error, Name: "EarlyErr", Inputs: ParameterArray{{Type: "uint256"}}},
 	}
@@ -1286,7 +1286,7 @@ func TestUnwrapErrorStringCustomBeforeDefaultError(t *testing.T) {
 	s := "head:" + string(customEncoded) + "middle:" + string(innerErrorABI)
 	outerABI := buildErrorStringABI([]byte(s))
 
-	result, ok := customABI.UnwrapErrorString(outerABI)
+	result, ok := customABI.ErrorString(outerABI, ErrorFormatOption{Unwrap: true})
 	assert.True(t, ok)
 	assert.Equal(t, `head:EarlyErr("42")`, result)
 }

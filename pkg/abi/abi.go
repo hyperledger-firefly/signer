@@ -370,35 +370,46 @@ func (a ABI) ParseErrorCtx(ctx context.Context, revertData []byte) (*Entry, *Com
 	return nil, nil, false
 }
 
-func (a ABI) ErrorString(revertData []byte) (string, bool) {
-	return a.ErrorStringCtx(context.Background(), revertData)
+// ErrorFormatOption configures the behaviour of ErrorString and ErrorStringCtx.
+type ErrorFormatOption struct {
+	// Unwrap causes the full inner error chain to be decoded and formatted,
+	// handling the Solidity catch-and-rethrow pattern where a contract embeds
+	// a caught revert inside a new Error(string) via string.concat/string(reason).
+	// Without this option only the outermost error is formatted.
+	Unwrap bool
 }
 
-func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte) (strError string, ok bool) {
-	e, cv, ok := a.ParseErrorCtx(ctx, revertData)
-	if ok {
-		strError = FormatErrorStringCtx(ctx, e, cv)
-		ok = strError != ""
+// ErrorString formats raw EVM revert data as a human-readable string.
+// Pass ErrorFormatOption{Unwrap: true} to recursively decode inner errors
+// produced by Solidity catch-and-rethrow patterns.
+func (a ABI) ErrorString(revertData []byte, options ...ErrorFormatOption) (string, bool) {
+	return a.ErrorStringCtx(context.Background(), revertData, options...)
+}
+
+// ErrorStringCtx formats raw EVM revert data as a human-readable string.
+// The ABI's own error entries are tried first, followed by the built-in
+// Error(string) and Panic(uint256).
+// Pass ErrorFormatOption{Unwrap: true} to recursively decode inner errors
+// produced by Solidity catch-and-rethrow patterns.
+func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte, options ...ErrorFormatOption) (string, bool) {
+	unwrap := false
+	for _, o := range options {
+		unwrap = unwrap || o.Unwrap
 	}
-	return strError, ok
-}
-
-// UnwrapErrorStringCtx is like ErrorStringCtx but handles nested errors caused by
-// Solidity contracts that catch a revert and re-throw using string(reason).
-// Delegates to DecodeRevertErrorCtx for structured decoding, then formats the
-// result as a human-readable string.
-func (a ABI) UnwrapErrorStringCtx(ctx context.Context, revertData []byte) (string, bool) {
-	r := a.DecodeRevertErrorCtx(ctx, revertData)
-	if r == nil {
+	if unwrap {
+		r := a.DecodeRevertErrorCtx(ctx, revertData)
+		if r == nil {
+			return "", false
+		}
+		s := r.String()
+		return s, s != ""
+	}
+	e, cv, ok := a.ParseErrorCtx(ctx, revertData)
+	if !ok {
 		return "", false
 	}
-	s := r.String()
+	s := FormatErrorStringCtx(ctx, e, cv)
 	return s, s != ""
-}
-
-// UnwrapErrorString is a convenience wrapper for UnwrapErrorStringCtx.
-func (a ABI) UnwrapErrorString(revertData []byte) (string, bool) {
-	return a.UnwrapErrorStringCtx(context.Background(), revertData)
 }
 
 // SanitizeBinaryString returns the input as a text string if it is entirely
