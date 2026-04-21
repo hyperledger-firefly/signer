@@ -1291,6 +1291,165 @@ func TestErrorStringUnwrapCustomBeforeDefault(t *testing.T) {
 	assert.Equal(t, `head:EarlyErr("42")`, result)
 }
 
+// TestErrorStringAssemblyBubbleUp demonstrates that the assembly bubble-up
+// pattern produces legible output from ErrorString — with or without Unwrap.
+//
+// Solidity's catch-and-rethrow via string.concat wraps the inner error bytes
+// inside an Error(string), so ErrorString without Unwrap returns unreadable
+// binary. The assembly bubble-up pattern:
+//
+//	(bool success, bytes memory result) = target.call(data);
+//	if (!success) { assembly { revert(add(32, result), mload(result)) } }
+//
+// passes the raw error bytes through unchanged (no outer wrapper), so the
+// error is decoded directly and is legible either way. Unwrap is not required
+// but is harmless.
+// TestAssemblyBubbleUpRealPayloads uses revert bytes captured from a live
+// Solidity deployment on Kaleido (contract AssemblyRevertTest) where each
+// bubbleXxx() function catches its inner revert via `catch (bytes memory data)`
+// and re-reverts with:
+//
+//	assembly { revert(add(32, data), mload(data)) }
+//
+// These payloads confirm that the assembly pattern passes bytes through
+// unchanged and that DecodeRevertError handles each without a new option.
+func TestAssemblyBubbleUpRealPayloads(t *testing.T) {
+	noParamsEntry := &Entry{Type: Error, Name: "NoParams", Inputs: ParameterArray{}}
+	insufficientEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{
+		{Name: "available", Type: "uint256"},
+		{Name: "required", Type: "uint256"},
+	}}
+	unauthorizedEntry := &Entry{Type: Error, Name: "Unauthorized", Inputs: ParameterArray{
+		{Name: "caller", Type: "address"},
+	}}
+	withStringEntry := &Entry{Type: Error, Name: "WithString", Inputs: ParameterArray{
+		{Name: "message", Type: "string"},
+	}}
+	customABI := ABI{noParamsEntry, insufficientEntry, unauthorizedEntry, withStringEntry}
+
+	tests := []struct {
+		name     string
+		hex      string
+		abi      ABI
+		wantStr  string
+		wantSig  string
+	}{
+		{
+			name:    "Error(string)",
+			hex:     "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4e6f7420656e6f7567682045746865722070726f76696465642e000000000000",
+			abi:     ABI{},
+			wantStr: `Error("Not enough Ether provided.")`,
+			wantSig: "Error(string)",
+		},
+		{
+			name:    "Panic(uint256)",
+			hex:     "0x4e487b710000000000000000000000000000000000000000000000000000000000000001",
+			abi:     ABI{},
+			wantStr: `Panic("1")`,
+			wantSig: "Panic(uint256)",
+		},
+		{
+			name:    "NoParams()",
+			hex:     "0xa28f5fc7",
+			abi:     customABI,
+			wantStr: `NoParams()`,
+			wantSig: "NoParams()",
+		},
+		{
+			name:    "InsufficientBalance(uint256,uint256)",
+			hex:     "0xcf479181000000000000000000000000000000000000000000000000000000000000006400000000000000000000000000000000000000000000000000000000000000c8",
+			abi:     customABI,
+			wantStr: `InsufficientBalance("100","200")`,
+			wantSig: "InsufficientBalance(uint256,uint256)",
+		},
+		{
+			name:    "WithString(string)",
+			hex:     "0x64ed940e0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000962616420696e7075740000000000000000000000000000000000000000000000",
+			abi:     customABI,
+			wantStr: `WithString("bad input")`,
+			wantSig: "WithString(string)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			revertData := ethtypes.MustNewHexBytes0xPrefix(tt.hex)
+
+			r := tt.abi.DecodeRevertError(revertData)
+			require.NotNil(t, r)
+			assert.Nil(t, r.GetInnerError(), "assembly bubble-up should produce no nesting")
+			assert.Equal(t, tt.wantStr, r.String())
+
+			sig, err := r.Signature()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantSig, sig)
+
+			// Unwrap option must not change the result for non-nested payloads
+			result, ok := tt.abi.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+			assert.True(t, ok)
+			assert.Equal(t, tt.wantStr, result)
+		})
+	}
+}
+
+func TestAssemblyBubbleUpUnauthorizedAddress(t *testing.T) {
+	// Separate test: address formatting needs its own assertion since the
+	// exact hex representation depends on the serializer's address format.
+	unauthorizedEntry := &Entry{Type: Error, Name: "Unauthorized", Inputs: ParameterArray{
+		{Name: "caller", Type: "address"},
+	}}
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x8e4a23d6000000000000000000000000000000000000000000000000000000000000dead")
+
+	r := ABI{unauthorizedEntry}.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Nil(t, r.GetInnerError())
+	assert.Equal(t, "Unauthorized", r.ErrorEntry.Name)
+	sig, err := r.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "Unauthorized(address)", sig)
+	// Confirm the address value is present in the formatted string
+	assert.Contains(t, r.String(), "dead")
+}
+
+func TestErrorStringAssemblyBubbleUp(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{
+		{Name: "available", Type: "uint256"},
+		{Name: "required", Type: "uint256"},
+	}}
+	customABI := ABI{customEntry}
+
+	// Real bytes from eth_call on AssemblyRevertTest.bubbleCustomWithUints()
+	// deployed on Kaleido — identical to a direct InsufficientBalance(100,200) revert.
+	rawErrorBytes := ethtypes.MustNewHexBytes0xPrefix(
+		"0xcf479181" +
+			"0000000000000000000000000000000000000000000000000000000000000064" +
+			"00000000000000000000000000000000000000000000000000000000000000c8")
+
+	// Without Unwrap: legible because the raw bytes ARE the error.
+	result, ok := customABI.ErrorString(rawErrorBytes)
+	assert.True(t, ok)
+	assert.Equal(t, `InsufficientBalance("100","200")`, result)
+
+	// With Unwrap: same output — no nesting to unwrap, so result is unchanged.
+	resultUnwrap, ok := customABI.ErrorString(rawErrorBytes, ErrorFormatOption{Unwrap: true})
+	assert.True(t, ok)
+	assert.Equal(t, result, resultUnwrap)
+
+	// Contrast: string.concat wraps the same error inside Error(string).
+	// Without Unwrap the string contains raw binary and is not legible.
+	wrappedBytes := buildErrorStringABI(append([]byte("outer: "), rawErrorBytes...))
+	resultWrappedNoUnwrap, ok := customABI.ErrorString(wrappedBytes)
+	assert.True(t, ok)
+	assert.False(t, strings.HasPrefix(resultWrappedNoUnwrap, "InsufficientBalance"),
+		"string.concat wrapping without Unwrap is not legible")
+
+	// With Unwrap the nesting is decoded and the result is legible again.
+	resultWrappedUnwrap, ok := customABI.ErrorString(wrappedBytes, ErrorFormatOption{Unwrap: true})
+	assert.True(t, ok)
+	assert.Equal(t, `outer: InsufficientBalance("100","200")`, resultWrappedUnwrap)
+}
+
 func TestSanitizeBinaryString(t *testing.T) {
 	assert.Equal(t, "", SanitizeBinaryString(nil))
 	assert.Equal(t, "", SanitizeBinaryString([]byte{}))
