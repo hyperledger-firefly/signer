@@ -397,7 +397,7 @@ func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte, options ...E
 		unwrap = unwrap || o.Unwrap
 	}
 	if unwrap {
-		r := a.DecodeRevertErrorCtx(ctx, revertData)
+		r := a.DecodeRevertErrorCtx(ctx, revertData, ErrorFormatOption{Unwrap: true})
 		if r == nil {
 			return "", false
 		}

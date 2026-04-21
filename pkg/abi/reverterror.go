@@ -54,18 +54,24 @@ type RevertError struct {
 	InnerError *RevertError    `ffstruct:"RevertError" json:"innerError,omitempty"` // recursively decoded inner error, nil if none
 }
 
-// DecodeRevertError decodes raw EVM revert data into a RevertError,
-// recursively unwrapping nested errors embedded in Error(string) values.
+// DecodeRevertError decodes raw EVM revert data into a RevertError.
+// Pass ErrorFormatOption{Unwrap: true} to recursively decode nested errors
+// embedded in Error(string) values by the Solidity catch-and-rethrow pattern.
 // Returns nil if the data does not match any known error selector.
-func (a ABI) DecodeRevertError(revertData []byte) *RevertError {
-	return a.DecodeRevertErrorCtx(context.Background(), revertData)
+func (a ABI) DecodeRevertError(revertData []byte, options ...ErrorFormatOption) *RevertError {
+	return a.DecodeRevertErrorCtx(context.Background(), revertData, options...)
 }
 
-// DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError,
-// recursively unwrapping nested errors embedded in Error(string) values.
+// DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError.
 // The ABI's error entries are tried first, followed by the built-in
 // Error(string) and Panic(uint256). Returns nil if no selector matches.
-func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *RevertError {
+// Pass ErrorFormatOption{Unwrap: true} to recursively decode nested errors
+// embedded in Error(string) values by the Solidity catch-and-rethrow pattern.
+func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte, options ...ErrorFormatOption) *RevertError {
+	unwrap := false
+	for _, o := range options {
+		unwrap = unwrap || o.Unwrap
+	}
 	abiErrors := a.FilterType(Error)
 	for _, source := range []ABI{abiErrors, defaultErrorEntries} {
 		for _, e := range source {
@@ -76,7 +82,7 @@ func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *Rever
 				// produces Error(string). Custom errors with string/bytes params that
 				// also embed error data are not yet handled since there is a high likelihood
 				// that they are not intended to carry error data.
-				if e.Name == "Error" && len(cv.Children) == 1 {
+				if unwrap && e.Name == "Error" && len(cv.Children) == 1 {
 					if strVal, ok := cv.Children[0].Value.(string); ok {
 						// Build a selector map covering both the caller's error entries
 						// and the built-in defaults, so inner errors of either kind can
