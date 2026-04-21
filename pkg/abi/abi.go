@@ -315,6 +315,42 @@ func (a ABI) Errors() map[string]*Entry {
 	return m
 }
 
+// FilterType returns a new ABI containing only the entries whose Type matches t,
+// preserving their original order. Returns nil if no entries match.
+// Use this to narrow an ABI before passing it to SelectorMap or other helpers,
+// e.g. a.FilterType(Error) to obtain only error definitions.
+func (a ABI) FilterType(t EntryType) ABI {
+	var out ABI
+	for _, e := range a {
+		if e.Type == t {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// SelectorMap builds a map from 4-byte ABI selectors to their corresponding
+// entries. When two entries in the ABI produce the same 4-byte selector, the
+// first one wins. Entries for which selector generation fails are silently
+// skipped.
+//
+// SelectorMap operates on all entry types — combine with FilterType to restrict
+// to a specific type, e.g. a.FilterType(Error).SelectorMap().
+func (a ABI) SelectorMap() map[[4]byte]*Entry {
+	m := make(map[[4]byte]*Entry)
+	for _, e := range a {
+		sel := e.FunctionSelectorBytes()
+		if len(sel) >= 4 {
+			var key [4]byte
+			copy(key[:], sel[:4])
+			if _, exists := m[key]; !exists {
+				m[key] = e
+			}
+		}
+	}
+	return m
+}
+
 // Returns the components value from the parsed error
 func (a ABI) ParseError(revertData []byte) (*Entry, *ComponentValue, bool) {
 	return a.ParseErrorCtx(context.Background(), revertData)
@@ -324,7 +360,7 @@ func (a ABI) ParseError(revertData []byte) (*Entry, *ComponentValue, bool) {
 // given revert data. The ABI's error entries are tried first, followed by the
 // built-in Error(string) and Panic(uint256).
 func (a ABI) ParseErrorCtx(ctx context.Context, revertData []byte) (*Entry, *ComponentValue, bool) {
-	for _, source := range []ABI{a.errors(), defaultErrorEntries} {
+	for _, source := range []ABI{a.FilterType(Error), defaultErrorEntries} {
 		for _, e := range source {
 			if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
 				return e, cv, true

@@ -55,18 +55,23 @@ func (a ABI) DecodeRevertError(revertData []byte) *RevertError {
 // The ABI's error entries are tried first, followed by the built-in
 // Error(string) and Panic(uint256). Returns nil if no selector matches.
 func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *RevertError {
-	for _, source := range []ABI{a.errors(), defaultErrorEntries} {
+	abiErrors := a.FilterType(Error)
+	for _, source := range []ABI{abiErrors, defaultErrorEntries} {
 		for _, e := range source {
 			if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
 				r := &RevertError{ErrorEntry: e, cv: cv}
-				// Only Error(string) is unwrapped for nesting, because the Solidity
+				// Only Error(string) is unwrapped for inner errors, because the Solidity
 				// catch-and-rethrow pattern (string.concat + string(reason)) always
 				// produces Error(string). Custom errors with string/bytes params that
-				// also embed error data are not yet handled since there is a high liklihood
-				//that they are not intended to carry error data.
+				// also embed error data are not yet handled since there is a high likelihood
+				// that they are not intended to carry error data.
 				if e.Name == "Error" && len(cv.Children) == 1 {
 					if strVal, ok := cv.Children[0].Value.(string); ok {
-						r.unwrapInnerError(ctx, a.selectorMap(), strVal, 0)
+						// Build a selector map covering both the caller's error entries
+						// and the built-in defaults, so inner errors of either kind can
+						// be recognised during recursive unwrapping.
+						selectors := append(abiErrors, defaultErrorEntries...).SelectorMap()
+						r.unwrapInnerError(ctx, selectors, strVal, 0)
 					}
 				}
 				return r
@@ -76,30 +81,9 @@ func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte) *Rever
 	return nil
 }
 
-type selectorKey = [4]byte
-
-// selectorMap builds a lookup of 4-byte selectors for all error entries in
-// the ABI plus the builtins.
-func (a ABI) selectorMap() map[selectorKey]*Entry {
-	selectors := make(map[selectorKey]*Entry)
-	var key selectorKey
-	for _, source := range []ABI{a.errors(), defaultErrorEntries} {
-		for _, e := range source {
-			sel := e.FunctionSelectorBytes()
-			if len(sel) >= 4 {
-				copy(key[:], sel[:4])
-				if _, exists := selectors[key]; !exists {
-					selectors[key] = e
-				}
-			}
-		}
-	}
-	return selectors
-}
-
 // unwrapInnerError scans a decoded string value for an embedded ABI error selector.
 // If found, it populates r.Prefix and r.InnerError to form the recursive chain.
-func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[selectorKey]*Entry, s string, depth int) {
+func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[[4]byte]*Entry, s string, depth int) {
 	if depth >= maxRevertErrorDepth {
 		return
 	}
@@ -129,11 +113,11 @@ func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[select
 }
 
 // findSelector scans raw bytes for the first occurrence of a known 4-byte error selector.
-func findSelector(raw []byte, selectors map[selectorKey]*Entry) (int, *Entry) {
+func findSelector(raw []byte, selectors map[[4]byte]*Entry) (int, *Entry) {
 	if len(raw) < 4 {
 		return -1, nil
 	}
-	var key selectorKey
+	var key [4]byte
 	for i := 0; i <= len(raw)-4; i++ {
 		copy(key[:], raw[i:i+4])
 		if e, ok := selectors[key]; ok {
@@ -141,17 +125,6 @@ func findSelector(raw []byte, selectors map[selectorKey]*Entry) (int, *Entry) {
 		}
 	}
 	return -1, nil
-}
-
-// errors returns only the Error-type entries from the ABI.
-func (a ABI) errors() ABI {
-	var out ABI
-	for _, e := range a {
-		if e.Type == Error {
-			out = append(out, e)
-		}
-	}
-	return out
 }
 
 // String returns a human-readable representation of the full error chain.

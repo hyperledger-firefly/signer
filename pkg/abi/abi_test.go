@@ -1076,6 +1076,81 @@ func TestErrorString(t *testing.T) {
 
 }
 
+func TestFilterType(t *testing.T) {
+	abi := ABI{
+		{Type: Function, Name: "transfer"},
+		{Type: Error, Name: "MyError", Inputs: ParameterArray{{Type: "string"}}},
+		{Type: Event, Name: "Transfer"},
+		{Type: Error, Name: "AnotherError", Inputs: ParameterArray{{Type: "uint256"}}},
+	}
+
+	errors := abi.FilterType(Error)
+	require.Len(t, errors, 2)
+	assert.Equal(t, "MyError", errors[0].Name)
+	assert.Equal(t, "AnotherError", errors[1].Name)
+
+	functions := abi.FilterType(Function)
+	require.Len(t, functions, 1)
+	assert.Equal(t, "transfer", functions[0].Name)
+
+	// No constructors present — result should be nil
+	assert.Nil(t, abi.FilterType(Constructor))
+
+	// Empty ABI
+	assert.Nil(t, ABI{}.FilterType(Error))
+}
+
+func TestSelectorMap(t *testing.T) {
+	errorEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	panicEntry := &Entry{Type: Error, Name: "Panic", Inputs: ParameterArray{{Name: "code", Type: "uint256"}}}
+	abi := ABI{errorEntry, panicEntry}
+
+	m := abi.SelectorMap()
+	assert.Len(t, m, 2)
+
+	var errorKey [4]byte
+	copy(errorKey[:], errorEntry.FunctionSelectorBytes())
+	assert.Equal(t, errorEntry, m[errorKey])
+
+	var panicKey [4]byte
+	copy(panicKey[:], panicEntry.FunctionSelectorBytes())
+	assert.Equal(t, panicEntry, m[panicKey])
+}
+
+func TestSelectorMapFirstWins(t *testing.T) {
+	// Two entries with identical signatures produce the same 4-byte selector;
+	// the first one should win as a deterministic tiebreaker.
+	first := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	second := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	m := ABI{first, second}.SelectorMap()
+
+	var key [4]byte
+	copy(key[:], first.FunctionSelectorBytes())
+	assert.Equal(t, first, m[key], "first entry should win on selector collision")
+}
+
+func TestSelectorMapEmpty(t *testing.T) {
+	assert.Empty(t, ABI{}.SelectorMap())
+}
+
+func TestSelectorMapAllEntryTypes(t *testing.T) {
+	// SelectorMap works on any entry type, not just errors.
+	// Callers can use FilterType first to restrict the scope.
+	fnEntry := &Entry{Type: Function, Name: "transfer", Inputs: ParameterArray{{Type: "address"}, {Type: "uint256"}}}
+	errEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{{Type: "uint256"}}}
+	abi := ABI{fnEntry, errEntry}
+
+	m := abi.SelectorMap()
+	assert.Len(t, m, 2)
+
+	// Restricting to errors only via FilterType gives a smaller map.
+	errOnly := abi.FilterType(Error).SelectorMap()
+	assert.Len(t, errOnly, 1)
+	var key [4]byte
+	copy(key[:], errEntry.FunctionSelectorBytes())
+	assert.Equal(t, errEntry, errOnly[key])
+}
+
 // buildErrorStringABI builds the raw ABI encoding for Error(string) with the given message bytes.
 func buildErrorStringABI(msgBytes []byte) []byte {
 	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
