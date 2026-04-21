@@ -17,7 +17,6 @@
 package abi
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -1151,23 +1150,16 @@ func TestSelectorMapAllEntryTypes(t *testing.T) {
 	assert.Equal(t, errEntry, errOnly[key])
 }
 
-// buildErrorStringABI builds the raw ABI encoding for Error(string) with the given message bytes.
+// buildErrorStringABI encodes msgBytes as the reason argument of Error(string)
+// using the ABI pipeline, producing call data prefixed with the 4-byte selector.
+// msgBytes may contain arbitrary binary content (e.g. embedded ABI-encoded errors).
 func buildErrorStringABI(msgBytes []byte) []byte {
-	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
-	sel := defaultErr.FunctionSelectorBytes()
-	offset := make([]byte, 32)
-	binary.BigEndian.PutUint64(offset[24:], 0x20)
-	length := make([]byte, 32)
-	binary.BigEndian.PutUint64(length[24:], uint64(len(msgBytes)))
-	paddedLen := ((len(msgBytes) + 31) / 32) * 32
-	data := make([]byte, paddedLen)
-	copy(data, msgBytes)
-	result := make([]byte, 0, 4+32+32+paddedLen)
-	result = append(result, sel...)
-	result = append(result, offset...)
-	result = append(result, length...)
-	result = append(result, data...)
-	return result
+	entry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	data, err := entry.EncodeCallDataValues([]interface{}{string(msgBytes)})
+	if err != nil {
+		panic(fmt.Sprintf("buildErrorStringABI: %s", err))
+	}
+	return data
 }
 
 func TestUnwrapErrorStringPlainError(t *testing.T) {
@@ -1286,12 +1278,8 @@ func TestUnwrapErrorStringCustomBeforeDefaultError(t *testing.T) {
 	customABI := ABI{
 		{Type: Error, Name: "EarlyErr", Inputs: ParameterArray{{Type: "uint256"}}},
 	}
-	customSel := customABI[0].FunctionSelectorBytes()
-
-	arg := make([]byte, 32)
-	binary.BigEndian.PutUint64(arg[24:], 42)
-	customEncoded := append([]byte(nil), customSel...)
-	customEncoded = append(customEncoded, arg...)
+	customEncoded, err := customABI[0].EncodeCallDataValues([]interface{}{42})
+	require.NoError(t, err)
 
 	innerErrorABI := buildErrorStringABI([]byte("late-error"))
 	// Custom selector appears before the Error(string) selector
