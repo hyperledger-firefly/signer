@@ -32,6 +32,17 @@ var defaultErrorEntries = ABI{
 
 const maxRevertErrorDepth = 10
 
+// maxInnerErrorScanBytes caps how far into a string value we search for an
+// embedded ABI selector. Revert strings are measured in tens of bytes in
+// practice, so 1024 is already far beyond any realistic prefix length.
+const maxInnerErrorScanBytes = 1024
+
+// minABIEncodedLen is the minimum byte length for a decodable ABI-encoded
+// error: 4 bytes for the selector plus at least one 32-byte word for the
+// first parameter. A candidate selector with fewer bytes remaining is
+// guaranteed to fail decoding, so it is skipped.
+const minABIEncodedLen = 4 + 32
+
 // RevertError represents a decoded Solidity revert error. For nested errors
 // (where a contract catches a revert and re-throws with the original error
 // embedded in the string), the InnerError field links to the inner decoded
@@ -112,13 +123,24 @@ func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[[4]byt
 	}
 }
 
-// findSelector scans raw bytes for the first occurrence of a known 4-byte error selector.
+// findSelector scans raw bytes for the first occurrence of a known 4-byte
+// error selector. Two constraints are folded into the loop bound:
+//   - We stop scanning after maxInnerErrorScanBytes, bounding performance on
+//     large payloads (revert strings are tiny in practice).
+//   - We only consider positions where at least minABIEncodedLen bytes remain,
+//     since a selector with fewer bytes after it cannot decode successfully.
 func findSelector(raw []byte, selectors map[[4]byte]*Entry) (int, *Entry) {
-	if len(raw) < 4 {
-		return -1, nil
+	scanLimit := len(raw)
+	if scanLimit > maxInnerErrorScanBytes {
+		scanLimit = maxInnerErrorScanBytes
+	}
+	// limit is the highest start index that satisfies both constraints.
+	limit := scanLimit - 4
+	if remainingLimit := len(raw) - minABIEncodedLen; remainingLimit < limit {
+		limit = remainingLimit
 	}
 	var key [4]byte
-	for i := 0; i <= len(raw)-4; i++ {
+	for i := 0; i <= limit; i++ {
 		copy(key[:], raw[i:i+4])
 		if e, ok := selectors[key]; ok {
 			return i, e

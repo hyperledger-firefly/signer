@@ -600,3 +600,34 @@ func TestDecodeRevertErrorNestedSignatures(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "Error(string)", innerSig)
 }
+
+// --- findSelector constraints ---
+
+func TestFindSelectorScanCapExceeded(t *testing.T) {
+	// Place a valid inner error beyond the maxInnerErrorScanBytes boundary.
+	// It should not be found.
+	innerABI := buildErrorStringABI([]byte("inner"))
+	prefix := make([]byte, maxInnerErrorScanBytes) // pushes selector past the cap
+	outerABI := buildErrorStringABI(append(prefix, innerABI...))
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Nil(t, r.GetInnerError(), "selector beyond scan cap should not be found")
+}
+
+func TestFindSelectorInsufficientBytesAfterSelector(t *testing.T) {
+	// Build a payload where the selector appears near the end of the string
+	// with fewer than minABIEncodedLen bytes remaining after it — too short
+	// to hold a valid ABI encoding.
+	entry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	sel := entry.FunctionSelectorBytes()
+
+	// Append only 3 bytes after the selector — less than the 32-byte minimum word.
+	truncated := append([]byte(nil), sel...)
+	truncated = append(truncated, 0x00, 0x00, 0x00)
+	outerABI := buildErrorStringABI(truncated)
+
+	r := ABI{}.DecodeRevertError(outerABI)
+	require.NotNil(t, r)
+	assert.Nil(t, r.GetInnerError(), "selector with insufficient trailing bytes should be skipped")
+}
