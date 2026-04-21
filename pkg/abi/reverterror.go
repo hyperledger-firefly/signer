@@ -55,8 +55,8 @@ type RevertError struct {
 }
 
 // DecodeRevertError decodes raw EVM revert data into a RevertError.
-// Pass ErrorFormatOption{Unwrap: true} to recursively decode nested errors
-// embedded in Error(string) values by the Solidity catch-and-rethrow pattern.
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to scan for inner errors
+// binary-encoded within an Error(string) value.
 // Returns nil if the data does not match any known error selector.
 func (a ABI) DecodeRevertError(revertData []byte, options ...ErrorFormatOption) *RevertError {
 	return a.DecodeRevertErrorCtx(context.Background(), revertData, options...)
@@ -65,30 +65,28 @@ func (a ABI) DecodeRevertError(revertData []byte, options ...ErrorFormatOption) 
 // DecodeRevertErrorCtx decodes raw EVM revert data into a RevertError.
 // The ABI's error entries are tried first, followed by the built-in
 // Error(string) and Panic(uint256). Returns nil if no selector matches.
-// Pass ErrorFormatOption{Unwrap: true} to recursively decode nested errors
-// embedded in Error(string) values by the Solidity catch-and-rethrow pattern.
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to scan for inner errors
+// binary-encoded within an Error(string) value.
 func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte, options ...ErrorFormatOption) *RevertError {
-	unwrap := false
+	searchBinary := false
 	for _, o := range options {
-		unwrap = unwrap || o.Unwrap
+		searchBinary = searchBinary || o.SearchForWrappedBinaryErrors
 	}
 	abiErrors := a.FilterType(Error)
 	for _, source := range []ABI{abiErrors, defaultErrorEntries} {
 		for _, e := range source {
 			if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
 				r := &RevertError{ErrorEntry: e, cv: cv}
-				// Only Error(string) is unwrapped for inner errors, because the Solidity
-				// catch-and-rethrow pattern (string.concat + string(reason)) always
-				// produces Error(string). Custom errors with string/bytes params that
-				// also embed error data are not yet handled since there is a high likelihood
-				// that they are not intended to carry error data.
-				if unwrap && e.Name == "Error" && len(cv.Children) == 1 {
+				// Only Error(string) is scanned for binary-wrapped inner errors.
+				// Custom errors with string/bytes params are not scanned since there
+				// is a high likelihood that they are not intended to carry error data.
+				if searchBinary && e.Name == "Error" && len(cv.Children) == 1 {
 					if strVal, ok := cv.Children[0].Value.(string); ok {
 						// Build a selector map covering both the caller's error entries
 						// and the built-in defaults, so inner errors of either kind can
 						// be recognised during recursive unwrapping.
 						selectors := append(abiErrors, defaultErrorEntries...).SelectorMap()
-						r.unwrapInnerError(ctx, selectors, strVal, 0)
+						r.scanForBinaryWrappedError(ctx, selectors, strVal, 0)
 					}
 				}
 				return r
@@ -98,9 +96,9 @@ func (a ABI) DecodeRevertErrorCtx(ctx context.Context, revertData []byte, option
 	return nil
 }
 
-// unwrapInnerError scans a decoded string value for an embedded ABI error selector.
+// scanForBinaryWrappedError scans a decoded string value for an embedded ABI error selector.
 // If found, it populates r.Prefix and r.InnerError to form the recursive chain.
-func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[[4]byte]*Entry, s string, depth int) {
+func (r *RevertError) scanForBinaryWrappedError(ctx context.Context, selectors map[[4]byte]*Entry, s string, depth int) {
 	if depth >= maxRevertErrorDepth {
 		return
 	}
@@ -121,10 +119,10 @@ func (r *RevertError) unwrapInnerError(ctx context.Context, selectors map[[4]byt
 	r.Prefix = SanitizeBinaryString(raw[:idx])
 	r.InnerError = inner
 
-	// If the inner error is also Error(string), keep unwrapping
+	// If the inner error is also Error(string), keep scanning recursively
 	if entry.Name == "Error" && len(cv.Children) == 1 {
 		if strVal, ok := cv.Children[0].Value.(string); ok {
-			inner.unwrapInnerError(ctx, selectors, strVal, depth+1)
+			inner.scanForBinaryWrappedError(ctx, selectors, strVal, depth+1)
 		}
 	}
 }
@@ -174,8 +172,8 @@ func (r *RevertError) String() string {
 
 // ErrorString returns the formatted error at this level only, e.g.
 // Error("not enough funds") or MyCustomError("0x1234","-100").
-// Unlike String(), it does not walk the Cause chain — use it when
-// you need the single-level description without recursive unwrapping.
+// Unlike String(), it does not walk the chain — use it when
+// you need the single-level description.
 func (r *RevertError) ErrorString() string {
 	if r == nil {
 		return ""
@@ -214,7 +212,7 @@ func (r *RevertError) GetInnerError() *RevertError {
 }
 
 // Innermost walks the chain to return the deepest RevertError — the
-// original error that triggered the chain of catch-and-rethrow wrappers.
+// innermost binary-wrapped error.
 func (r *RevertError) Innermost() *RevertError {
 	if r == nil {
 		return nil

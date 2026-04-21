@@ -372,16 +372,17 @@ func (a ABI) ParseErrorCtx(ctx context.Context, revertData []byte) (*Entry, *Com
 
 // ErrorFormatOption configures the behaviour of ErrorString and ErrorStringCtx.
 type ErrorFormatOption struct {
-	// Unwrap causes the full inner error chain to be decoded and formatted,
-	// handling the Solidity catch-and-rethrow pattern where a contract embeds
-	// a caught revert inside a new Error(string) via string.concat/string(reason).
-	// Without this option only the outermost error is formatted.
-	Unwrap bool
+	// There is a pattern used in some smart contracts, where a string error is used
+	// to embed the raw bytes of an ABI encoded sub-error.
+	// While uncommon, this pattern is supported by the library if you set this switch.
+	// When set, every standard revert `Error(string)` error will be traversed to look for
+	// eyecatcher (4 byte signatures) of other errors binary encoded within the string.
+	SearchForWrappedBinaryErrors bool
 }
 
 // ErrorString formats raw EVM revert data as a human-readable string.
-// Pass ErrorFormatOption{Unwrap: true} to recursively decode inner errors
-// produced by Solidity catch-and-rethrow patterns.
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to decode inner errors
+// that are binary-encoded within an Error(string) value.
 func (a ABI) ErrorString(revertData []byte, options ...ErrorFormatOption) (string, bool) {
 	return a.ErrorStringCtx(context.Background(), revertData, options...)
 }
@@ -389,15 +390,15 @@ func (a ABI) ErrorString(revertData []byte, options ...ErrorFormatOption) (strin
 // ErrorStringCtx formats raw EVM revert data as a human-readable string.
 // The ABI's own error entries are tried first, followed by the built-in
 // Error(string) and Panic(uint256).
-// Pass ErrorFormatOption{Unwrap: true} to recursively decode inner errors
-// produced by Solidity catch-and-rethrow patterns.
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to decode inner errors
+// that are binary-encoded within an Error(string) value.
 func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte, options ...ErrorFormatOption) (string, bool) {
-	unwrap := false
+	searchBinary := false
 	for _, o := range options {
-		unwrap = unwrap || o.Unwrap
+		searchBinary = searchBinary || o.SearchForWrappedBinaryErrors
 	}
-	if unwrap {
-		r := a.DecodeRevertErrorCtx(ctx, revertData, ErrorFormatOption{Unwrap: true})
+	if searchBinary {
+		r := a.DecodeRevertErrorCtx(ctx, revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 		if r == nil {
 			return "", false
 		}

@@ -445,13 +445,13 @@ func testEncodeError(t *testing.T, entry *Entry, jsonArgs string) []byte {
 	return encoded
 }
 
-// --- InnerError unwrapping (DecodeRevertError with nesting) ---
+// --- Binary-wrapped inner errors (DecodeRevertError with SearchForWrappedBinaryErrors) ---
 
 func TestDecodeRevertErrorSingleNested(t *testing.T) {
 	innerABI := buildErrorStringABI([]byte("inner error message"))
 	outerABI := buildErrorStringABI(append([]byte("outer: "), innerABI...))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Equal(t, "Error", r.ErrorEntry.Name)
 	assert.Equal(t, "outer: ", r.Prefix)
@@ -468,7 +468,7 @@ func TestDecodeRevertErrorDoubleNested(t *testing.T) {
 	midABI := buildErrorStringABI(append([]byte("level2: "), deepABI...))
 	outerABI := buildErrorStringABI(append([]byte("level1: "), midABI...))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Equal(t, "level1: ", r.Prefix)
 
@@ -493,7 +493,7 @@ func TestDecodeRevertErrorNestedCustomError(t *testing.T) {
 
 	outerABI := buildErrorStringABI(append([]byte("[404]01d - caught bytes:"), customEncoded...))
 
-	r := ABI{customEntry}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{customEntry}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Equal(t, "Error", r.ErrorEntry.Name)
 	assert.Equal(t, "[404]01d - caught bytes:", r.Prefix)
@@ -521,7 +521,7 @@ func TestDecodeRevertErrorCustomBeforeDefaultNested(t *testing.T) {
 	payload = append(payload, innerErrorABI...)
 	outerABI := buildErrorStringABI(payload)
 
-	r := ABI{customEntry}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{customEntry}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Equal(t, "head:", r.Prefix)
 
@@ -533,7 +533,7 @@ func TestDecodeRevertErrorCustomBeforeDefaultNested(t *testing.T) {
 func TestDecodeRevertErrorNoNesting(t *testing.T) {
 	outerABI := buildErrorStringABI([]byte("plain error with no nesting"))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Equal(t, "", r.Prefix)
 	assert.Nil(t, r.GetInnerError())
@@ -548,7 +548,7 @@ func TestDecodeRevertErrorMalformedNested(t *testing.T) {
 	badData = append(badData, []byte("truncated")...)
 	outerABI := buildErrorStringABI(badData)
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Nil(t, r.GetInnerError(), "malformed inner data should not produce an inner error")
 	assert.Equal(t, "", r.Prefix)
@@ -561,7 +561,7 @@ func TestDecodeRevertErrorDepthLimit(t *testing.T) {
 		data = buildErrorStringABI(append([]byte("L:"), data...))
 	}
 
-	r := ABI{}.DecodeRevertError(data, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(data, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 
 	depth := 0
@@ -575,7 +575,7 @@ func TestDecodeRevertErrorInnermostSerializeJSON(t *testing.T) {
 	innerABI := buildErrorStringABI([]byte("inner value"))
 	outerABI := buildErrorStringABI(append([]byte("prefix:"), innerABI...))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 
 	leaf := r.Innermost()
@@ -589,7 +589,7 @@ func TestDecodeRevertErrorNestedSignatures(t *testing.T) {
 	innerABI := buildErrorStringABI([]byte("inner"))
 	outerABI := buildErrorStringABI(append([]byte("prefix:"), innerABI...))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 
 	outerSig, err := r.Signature()
@@ -610,7 +610,7 @@ func TestFindSelectorScanCapExceeded(t *testing.T) {
 	prefix := make([]byte, maxInnerErrorScanBytes) // pushes selector past the cap
 	outerABI := buildErrorStringABI(append(prefix, innerABI...))
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Nil(t, r.GetInnerError(), "selector beyond scan cap should not be found")
 }
@@ -627,7 +627,7 @@ func TestFindSelectorInsufficientBytesAfterSelector(t *testing.T) {
 	truncated = append(truncated, 0x00, 0x00, 0x00)
 	outerABI := buildErrorStringABI(truncated)
 
-	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{Unwrap: true})
+	r := ABI{}.DecodeRevertError(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	require.NotNil(t, r)
 	assert.Nil(t, r.GetInnerError(), "selector with insufficient trailing bytes should be skipped")
 }

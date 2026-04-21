@@ -1162,19 +1162,19 @@ func buildErrorStringABI(msgBytes []byte) []byte {
 	return data
 }
 
-func TestErrorStringUnwrapPlainError(t *testing.T) {
+func TestErrorStringBinaryWrappedPlainError(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a0" +
 			"0000000000000000000000000000000000000000000000000000000000000020" +
 			"000000000000000000000000000000000000000000000000000000000000001a" +
 			"4e6f7420656e6f7567682045746865722070726f76696465642e000000000000")
 
-	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `Error("Not enough Ether provided.")`, result)
 }
 
-func TestErrorStringUnwrapSingleNested(t *testing.T) {
+func TestErrorStringBinaryWrappedSingleNested(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a00000000000000000000000000000000000000000000000000000000000000020" +
 			"000000000000000000000000000000000000000000000000000000000000006b" +
@@ -1185,12 +1185,12 @@ func TestErrorStringUnwrapSingleNested(t *testing.T) {
 			"696e6e6572206572726f72206d65737361676500000000000000000000000000" +
 			"000000000000000000000000000000000000000000")
 
-	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `outer: Error("inner error message")`, result)
 }
 
-func TestErrorStringUnwrapDoubleNested(t *testing.T) {
+func TestErrorStringBinaryWrappedDoubleNested(t *testing.T) {
 	revertData := ethtypes.MustNewHexBytes0xPrefix(
 		"0x08c379a0" +
 			"0000000000000000000000000000000000000000000000000000000000000020" +
@@ -1205,12 +1205,12 @@ func TestErrorStringUnwrapDoubleNested(t *testing.T) {
 			"000000000000000000000000000000000000000000000000000000000000000d" +
 			"64656570657374206572726f720000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
 
-	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `level1: level2: Error("deepest error")`, result)
 }
 
-func TestErrorStringUnwrapNestedCustomError(t *testing.T) {
+func TestErrorStringBinaryWrappedNestedCustomError(t *testing.T) {
 	customABI := ABI{
 		{Type: Error, Name: "MyCustomError", Inputs: ParameterArray{{Type: "bytes"}}},
 	}
@@ -1229,23 +1229,23 @@ func TestErrorStringUnwrapNestedCustomError(t *testing.T) {
 
 	// Without the custom ABI the inner error can't be decoded — the
 	// outer Error(string) is formatted directly (binary content included)
-	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.True(t, strings.HasPrefix(result, `Error("[404]01d`))
 
 	// With the custom ABI the inner error is decoded
-	result, ok = customABI.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+	result, ok = customABI.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `[404]01d - caught bytes:MyCustomError("0xdeadbeef")`, result)
 }
 
-func TestErrorStringUnwrapUnknownSelector(t *testing.T) {
+func TestErrorStringBinaryWrappedUnknownSelector(t *testing.T) {
 	// Unknown top-level selector
-	_, ok := ABI{}.ErrorString([]byte{0x11, 0x22, 0x33, 0x44}, ErrorFormatOption{Unwrap: true})
+	_, ok := ABI{}.ErrorString([]byte{0x11, 0x22, 0x33, 0x44}, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.False(t, ok)
 }
 
-func TestErrorStringUnwrapMalformedInnerABI(t *testing.T) {
+func TestErrorStringBinaryWrappedMalformedInner(t *testing.T) {
 	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
 	sel := defaultErr.FunctionSelectorBytes()
 
@@ -1254,19 +1254,19 @@ func TestErrorStringUnwrapMalformedInnerABI(t *testing.T) {
 
 	// Malformed inner data can't be decoded, so the outer Error(string)
 	// is formatted directly with the raw string content
-	result, ok := ABI{}.ErrorString(outerABI, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.True(t, strings.HasPrefix(result, "Error("))
 }
 
-func TestErrorStringUnwrapDepthLimit(t *testing.T) {
+func TestErrorStringBinaryWrappedDepthLimit(t *testing.T) {
 	// Build a chain deeper than maxRevertErrorDepth (10)
 	data := []byte("leaf")
 	for i := 0; i < maxRevertErrorDepth+2; i++ {
 		data = buildErrorStringABI(append([]byte("L:"), data...))
 	}
 
-	result, ok := ABI{}.ErrorString(data, ErrorFormatOption{Unwrap: true})
+	result, ok := ABI{}.ErrorString(data, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 
 	// The chain should be capped — the leaf should not be fully unwrapped
@@ -1274,7 +1274,7 @@ func TestErrorStringUnwrapDepthLimit(t *testing.T) {
 	assert.NotEmpty(t, result)
 }
 
-func TestErrorStringUnwrapCustomBeforeDefault(t *testing.T) {
+func TestErrorStringBinaryWrappedCustomBeforeDefault(t *testing.T) {
 	customABI := ABI{
 		{Type: Error, Name: "EarlyErr", Inputs: ParameterArray{{Type: "uint256"}}},
 	}
@@ -1286,24 +1286,22 @@ func TestErrorStringUnwrapCustomBeforeDefault(t *testing.T) {
 	s := "head:" + string(customEncoded) + "middle:" + string(innerErrorABI)
 	outerABI := buildErrorStringABI([]byte(s))
 
-	result, ok := customABI.ErrorString(outerABI, ErrorFormatOption{Unwrap: true})
+	result, ok := customABI.ErrorString(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `head:EarlyErr("42")`, result)
 }
 
 // TestErrorStringAssemblyBubbleUp demonstrates that the assembly bubble-up
-// pattern produces legible output from ErrorString — with or without Unwrap.
+// pattern produces legible output from ErrorString — with or without SearchForWrappedBinaryErrors.
 //
-// Solidity's catch-and-rethrow via string.concat wraps the inner error bytes
-// inside an Error(string), so ErrorString without Unwrap returns unreadable
-// binary. The assembly bubble-up pattern:
+// The assembly bubble-up pattern:
 //
 //	(bool success, bytes memory result) = target.call(data);
 //	if (!success) { assembly { revert(add(32, result), mload(result)) } }
 //
 // passes the raw error bytes through unchanged (no outer wrapper), so the
-// error is decoded directly and is legible either way. Unwrap is not required
-// but is harmless.
+// error is decoded directly and is legible either way. SearchForWrappedBinaryErrors
+// is not required but is harmless.
 // TestAssemblyBubbleUpRealPayloads uses revert bytes captured from a live
 // Solidity deployment on Kaleido (contract AssemblyRevertTest) where each
 // bubbleXxx() function catches its inner revert via `catch (bytes memory data)`
@@ -1384,8 +1382,8 @@ func TestAssemblyBubbleUpRealPayloads(t *testing.T) {
 			assert.NoError(t, err)
 			assert.Equal(t, tt.wantSig, sig)
 
-			// Unwrap option must not change the result for non-nested payloads
-			result, ok := tt.abi.ErrorString(revertData, ErrorFormatOption{Unwrap: true})
+			// SearchForWrappedBinaryErrors must not change the result for non-nested payloads
+			result, ok := tt.abi.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 			assert.True(t, ok)
 			assert.Equal(t, tt.wantStr, result)
 		})
@@ -1431,21 +1429,21 @@ func TestErrorStringAssemblyBubbleUp(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, `InsufficientBalance("100","200")`, result)
 
-	// With Unwrap: same output — no nesting to unwrap, so result is unchanged.
-	resultUnwrap, ok := customABI.ErrorString(rawErrorBytes, ErrorFormatOption{Unwrap: true})
+	// With SearchForWrappedBinaryErrors: same output — no nesting, so result is unchanged.
+	resultUnwrap, ok := customABI.ErrorString(rawErrorBytes, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, result, resultUnwrap)
 
-	// Contrast: string.concat wraps the same error inside Error(string).
-	// Without Unwrap the string contains raw binary and is not legible.
+	// Contrast: wrapping the same error inside Error(string) embeds binary in the string.
+	// Without SearchForWrappedBinaryErrors the string contains raw binary and is not legible.
 	wrappedBytes := buildErrorStringABI(append([]byte("outer: "), rawErrorBytes...))
 	resultWrappedNoUnwrap, ok := customABI.ErrorString(wrappedBytes)
 	assert.True(t, ok)
 	assert.False(t, strings.HasPrefix(resultWrappedNoUnwrap, "InsufficientBalance"),
-		"string.concat wrapping without Unwrap is not legible")
+		"binary-wrapped error without SearchForWrappedBinaryErrors is not legible")
 
-	// With Unwrap the nesting is decoded and the result is legible again.
-	resultWrappedUnwrap, ok := customABI.ErrorString(wrappedBytes, ErrorFormatOption{Unwrap: true})
+	// With SearchForWrappedBinaryErrors the inner error is decoded and the result is legible.
+	resultWrappedUnwrap, ok := customABI.ErrorString(wrappedBytes, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
 	assert.True(t, ok)
 	assert.Equal(t, `outer: InsufficientBalance("100","200")`, resultWrappedUnwrap)
 }
