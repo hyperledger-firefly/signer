@@ -315,19 +315,53 @@ func (a ABI) Errors() map[string]*Entry {
 	return m
 }
 
+// FilterType returns a new ABI containing only the entries whose Type matches t,
+// preserving their original order. Returns nil if no entries match.
+// Use this to narrow an ABI before passing it to SelectorMap or other helpers,
+// e.g. a.FilterType(Error) to obtain only error definitions.
+func (a ABI) FilterType(t EntryType) ABI {
+	var out ABI
+	for _, e := range a {
+		if e.Type == t {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// SelectorMap builds a map from 4-byte ABI selectors to their corresponding
+// entries. When two entries in the ABI produce the same 4-byte selector, the
+// first one wins. Entries for which selector generation fails are silently
+// skipped.
+//
+// SelectorMap operates on all entry types — combine with FilterType to restrict
+// to a specific type, e.g. a.FilterType(Error).SelectorMap().
+func (a ABI) SelectorMap() map[[4]byte]*Entry {
+	m := make(map[[4]byte]*Entry)
+	for _, e := range a {
+		sel := e.FunctionSelectorBytes()
+		if len(sel) >= 4 {
+			var key [4]byte
+			copy(key[:], sel[:4])
+			if _, exists := m[key]; !exists {
+				m[key] = e
+			}
+		}
+	}
+	return m
+}
+
 // Returns the components value from the parsed error
 func (a ABI) ParseError(revertData []byte) (*Entry, *ComponentValue, bool) {
 	return a.ParseErrorCtx(context.Background(), revertData)
 }
 
-// Returns the components value from the parsed error
+// ParseErrorCtx returns the matched Entry and decoded ComponentValue from the
+// given revert data. The ABI's error entries are tried first, followed by the
+// built-in Error(string) and Panic(uint256).
 func (a ABI) ParseErrorCtx(ctx context.Context, revertData []byte) (*Entry, *ComponentValue, bool) {
-	// Always include the default error
-	a = append(ABI{
-		{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}},
-	}, a...)
-	for _, e := range a {
-		if e.Type == Error {
+	for _, source := range []ABI{a.FilterType(Error), defaultErrorEntries} {
+		for _, e := range source {
 			if cv, err := e.DecodeCallDataCtx(ctx, revertData); err == nil {
 				return e, cv, true
 			}
@@ -336,20 +370,65 @@ func (a ABI) ParseErrorCtx(ctx context.Context, revertData []byte) (*Entry, *Com
 	return nil, nil, false
 }
 
-func (a ABI) ErrorString(revertData []byte) (string, bool) {
-	return a.ErrorStringCtx(context.Background(), revertData)
+// ErrorFormatOption configures the behaviour of ErrorString and ErrorStringCtx.
+type ErrorFormatOption struct {
+	// There is a pattern used in some smart contracts, where a string error is used
+	// to embed the raw bytes of an ABI encoded sub-error.
+	// While uncommon, this pattern is supported by the library if you set this switch.
+	// When set, every standard revert `Error(string)` error will be traversed to look for
+	// eyecatcher (4 byte signatures) of other errors binary encoded within the string.
+	SearchForWrappedBinaryErrors bool
 }
 
-func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte) (strError string, ok bool) {
-	e, cv, ok := a.ParseErrorCtx(ctx, revertData)
-	if ok {
-		strError = FormatErrorStringCtx(ctx, e, cv)
-		ok = strError != ""
+// ErrorString formats raw EVM revert data as a human-readable string.
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to decode inner errors
+// that are binary-encoded within an Error(string) value.
+func (a ABI) ErrorString(revertData []byte, options ...ErrorFormatOption) (string, bool) {
+	return a.ErrorStringCtx(context.Background(), revertData, options...)
+}
+
+// ErrorStringCtx formats raw EVM revert data as a human-readable string.
+// The ABI's own error entries are tried first, followed by the built-in
+// Error(string) and Panic(uint256).
+// Pass ErrorFormatOption{SearchForWrappedBinaryErrors: true} to decode inner errors
+// that are binary-encoded within an Error(string) value.
+func (a ABI) ErrorStringCtx(ctx context.Context, revertData []byte, options ...ErrorFormatOption) (string, bool) {
+	searchBinary := false
+	for _, o := range options {
+		searchBinary = searchBinary || o.SearchForWrappedBinaryErrors
 	}
-	return strError, ok
+	if searchBinary {
+		r := a.DecodeRevertErrorCtx(ctx, revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+		if r == nil {
+			return "", false
+		}
+		s := r.String()
+		return s, s != ""
+	}
+	e, cv, ok := a.ParseErrorCtx(ctx, revertData)
+	if !ok {
+		return "", false
+	}
+	s := FormatErrorStringCtx(ctx, e, cv)
+	return s, s != ""
+}
+
+// SanitizeBinaryString returns the input as a text string if it is entirely
+// printable ASCII, or hex-encodes the entire input otherwise. This ensures the
+// output is always safe for database TEXT columns and human-readable logging.
+func SanitizeBinaryString(raw []byte) string {
+	for _, b := range raw {
+		if b < 32 || b >= 127 {
+			return "0x" + hex.EncodeToString(raw)
+		}
+	}
+	return string(raw)
 }
 
 func FormatErrorStringCtx(ctx context.Context, e *Entry, cv *ComponentValue) string {
+	if e == nil || cv == nil {
+		return ""
+	}
 	var ok bool
 	var parsed []interface{}
 	if res, err := NewSerializer().

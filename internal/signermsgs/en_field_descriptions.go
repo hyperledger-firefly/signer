@@ -48,6 +48,10 @@ var (
 	EIP712ResultR            = ffm("EIP712Result.r", "The R value of the ECDSA signature as a 32byte hex encoded array")
 	EIP712ResultS            = ffm("EIP712Result.s", "The S value of the ECDSA signature as a 32byte hex encoded array")
 
+	RevertErrorErrorEntry = ffm("RevertError.errorEntry", "The matched ABI error entry at this level of the error chain")
+	RevertErrorPrefix     = ffm("RevertError.prefix", "The readable text prefix before the nested inner error, extracted from the outer Error(string) value")
+	RevertErrorInnerError = ffm("RevertError.innerError", "The recursively decoded inner error, forming the next level of the error chain, or nil if this is the leaf")
+
 	TypedDataDomain      = ffm("TypedData.domain", "The data to encode into the EIP712Domain as part fo signing the transaction")
 	TypedDataMessage     = ffm("TypedData.message", "The data to encode into primaryType structure, with nested values for any sub-structures")
 	TypedDataTypes       = ffm("TypedData.types", "Array of types to use when encoding, which must include the primaryType and the EIP712Domain (noting the primary type can be EIP712Domain if the message is empty)")

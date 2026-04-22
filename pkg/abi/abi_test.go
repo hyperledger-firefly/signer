@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/hyperledger/firefly-common/pkg/ffapi"
@@ -1072,6 +1073,389 @@ func TestErrorString(t *testing.T) {
 	_, ok = customErrABI.ErrorString(mismatchError)
 	assert.False(t, ok)
 
+}
+
+func TestFilterType(t *testing.T) {
+	abi := ABI{
+		{Type: Function, Name: "transfer"},
+		{Type: Error, Name: "MyError", Inputs: ParameterArray{{Type: "string"}}},
+		{Type: Event, Name: "Transfer"},
+		{Type: Error, Name: "AnotherError", Inputs: ParameterArray{{Type: "uint256"}}},
+	}
+
+	errors := abi.FilterType(Error)
+	require.Len(t, errors, 2)
+	assert.Equal(t, "MyError", errors[0].Name)
+	assert.Equal(t, "AnotherError", errors[1].Name)
+
+	functions := abi.FilterType(Function)
+	require.Len(t, functions, 1)
+	assert.Equal(t, "transfer", functions[0].Name)
+
+	// No constructors present — result should be nil
+	assert.Nil(t, abi.FilterType(Constructor))
+
+	// Empty ABI
+	assert.Nil(t, ABI{}.FilterType(Error))
+}
+
+func TestSelectorMap(t *testing.T) {
+	errorEntry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	panicEntry := &Entry{Type: Error, Name: "Panic", Inputs: ParameterArray{{Name: "code", Type: "uint256"}}}
+	abi := ABI{errorEntry, panicEntry}
+
+	m := abi.SelectorMap()
+	assert.Len(t, m, 2)
+
+	var errorKey [4]byte
+	copy(errorKey[:], errorEntry.FunctionSelectorBytes())
+	assert.Equal(t, errorEntry, m[errorKey])
+
+	var panicKey [4]byte
+	copy(panicKey[:], panicEntry.FunctionSelectorBytes())
+	assert.Equal(t, panicEntry, m[panicKey])
+}
+
+func TestSelectorMapFirstWins(t *testing.T) {
+	// Two entries with identical signatures produce the same 4-byte selector;
+	// the first one should win as a deterministic tiebreaker.
+	first := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	second := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	m := ABI{first, second}.SelectorMap()
+
+	var key [4]byte
+	copy(key[:], first.FunctionSelectorBytes())
+	assert.Equal(t, first, m[key], "first entry should win on selector collision")
+}
+
+func TestSelectorMapEmpty(t *testing.T) {
+	assert.Empty(t, ABI{}.SelectorMap())
+}
+
+func TestSelectorMapAllEntryTypes(t *testing.T) {
+	// SelectorMap works on any entry type, not just errors.
+	// Callers can use FilterType first to restrict the scope.
+	fnEntry := &Entry{Type: Function, Name: "transfer", Inputs: ParameterArray{{Type: "address"}, {Type: "uint256"}}}
+	errEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{{Type: "uint256"}}}
+	abi := ABI{fnEntry, errEntry}
+
+	m := abi.SelectorMap()
+	assert.Len(t, m, 2)
+
+	// Restricting to errors only via FilterType gives a smaller map.
+	errOnly := abi.FilterType(Error).SelectorMap()
+	assert.Len(t, errOnly, 1)
+	var key [4]byte
+	copy(key[:], errEntry.FunctionSelectorBytes())
+	assert.Equal(t, errEntry, errOnly[key])
+}
+
+// buildErrorStringABI encodes msgBytes as the reason argument of Error(string)
+// using the ABI pipeline, producing call data prefixed with the 4-byte selector.
+// msgBytes may contain arbitrary binary content (e.g. embedded ABI-encoded errors).
+func buildErrorStringABI(msgBytes []byte) []byte {
+	entry := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	data, err := entry.EncodeCallDataValues([]interface{}{string(msgBytes)})
+	if err != nil {
+		panic(fmt.Sprintf("buildErrorStringABI: %s", err))
+	}
+	return data
+}
+
+func TestErrorStringBinaryWrappedPlainError(t *testing.T) {
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"000000000000000000000000000000000000000000000000000000000000001a" +
+			"4e6f7420656e6f7567682045746865722070726f76696465642e000000000000")
+
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `Error("Not enough Ether provided.")`, result)
+}
+
+func TestErrorStringBinaryWrappedSingleNested(t *testing.T) {
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x08c379a00000000000000000000000000000000000000000000000000000000000000020" +
+			"000000000000000000000000000000000000000000000000000000000000006b" +
+			"6f757465723a20" +
+			"08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"0000000000000000000000000000000000000000000000000000000000000013" +
+			"696e6e6572206572726f72206d65737361676500000000000000000000000000" +
+			"000000000000000000000000000000000000000000")
+
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `outer: Error("inner error message")`, result)
+}
+
+func TestErrorStringBinaryWrappedDoubleNested(t *testing.T) {
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"00000000000000000000000000000000000000000000000000000000000000cc" +
+			"6c6576656c313a20" +
+			"08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"000000000000000000000000000000000000000000000000000000000000006c" +
+			"6c6576656c323a20" +
+			"08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"000000000000000000000000000000000000000000000000000000000000000d" +
+			"64656570657374206572726f720000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000")
+
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `level1: level2: Error("deepest error")`, result)
+}
+
+func TestErrorStringBinaryWrappedNestedCustomError(t *testing.T) {
+	customABI := ABI{
+		{Type: Error, Name: "MyCustomError", Inputs: ParameterArray{{Type: "bytes"}}},
+	}
+	customSelector := hex.EncodeToString(customABI[0].FunctionSelectorBytes())
+
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x08c379a0" +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"000000000000000000000000000000000000000000000000000000000000007c" +
+			"5b3430345d303164202d206361756768742062797465733a" +
+			customSelector +
+			"0000000000000000000000000000000000000000000000000000000000000020" +
+			"0000000000000000000000000000000000000000000000000000000000000004" +
+			"deadbeef00000000000000000000000000000000000000000000000000000000" +
+			"00000000")
+
+	// Without the custom ABI the inner error can't be decoded — the
+	// outer Error(string) is formatted directly (binary content included)
+	result, ok := ABI{}.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.True(t, strings.HasPrefix(result, `Error("[404]01d`))
+
+	// With the custom ABI the inner error is decoded
+	result, ok = customABI.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `[404]01d - caught bytes:MyCustomError("0xdeadbeef")`, result)
+}
+
+func TestErrorStringBinaryWrappedUnknownSelector(t *testing.T) {
+	// Unknown top-level selector
+	_, ok := ABI{}.ErrorString([]byte{0x11, 0x22, 0x33, 0x44}, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.False(t, ok)
+}
+
+func TestErrorStringBinaryWrappedMalformedInner(t *testing.T) {
+	defaultErr := &Entry{Type: Error, Name: "Error", Inputs: ParameterArray{{Name: "reason", Type: "string"}}}
+	sel := defaultErr.FunctionSelectorBytes()
+
+	badData := "prefix:" + string(sel) + "truncated"
+	outerABI := buildErrorStringABI([]byte(badData))
+
+	// Malformed inner data can't be decoded, so the outer Error(string)
+	// is formatted directly with the raw string content
+	result, ok := ABI{}.ErrorString(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.True(t, strings.HasPrefix(result, "Error("))
+}
+
+func TestErrorStringBinaryWrappedDepthLimit(t *testing.T) {
+	// Build a chain deeper than maxRevertErrorDepth (10)
+	data := []byte("leaf")
+	for i := 0; i < maxRevertErrorDepth+2; i++ {
+		data = buildErrorStringABI(append([]byte("L:"), data...))
+	}
+
+	result, ok := ABI{}.ErrorString(data, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+
+	// The chain should be capped — the leaf should not be fully unwrapped
+	// through all levels, so the result won't contain a cleanly decoded "leaf"
+	assert.NotEmpty(t, result)
+}
+
+func TestErrorStringBinaryWrappedCustomBeforeDefault(t *testing.T) {
+	customABI := ABI{
+		{Type: Error, Name: "EarlyErr", Inputs: ParameterArray{{Type: "uint256"}}},
+	}
+	customEncoded, err := customABI[0].EncodeCallDataValues([]interface{}{42})
+	require.NoError(t, err)
+
+	innerErrorABI := buildErrorStringABI([]byte("late-error"))
+	// Custom selector appears before the Error(string) selector
+	s := "head:" + string(customEncoded) + "middle:" + string(innerErrorABI)
+	outerABI := buildErrorStringABI([]byte(s))
+
+	result, ok := customABI.ErrorString(outerABI, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `head:EarlyErr("42")`, result)
+}
+
+// TestErrorStringAssemblyBubbleUp demonstrates that the assembly bubble-up
+// pattern produces legible output from ErrorString — with or without SearchForWrappedBinaryErrors.
+//
+// The assembly bubble-up pattern:
+//
+//	(bool success, bytes memory result) = target.call(data);
+//	if (!success) { assembly { revert(add(32, result), mload(result)) } }
+//
+// passes the raw error bytes through unchanged (no outer wrapper), so the
+// error is decoded directly and is legible either way. SearchForWrappedBinaryErrors
+// is not required but is harmless.
+// TestAssemblyBubbleUpRealPayloads uses revert bytes captured from a live
+// Solidity deployment on Kaleido (contract AssemblyRevertTest) where each
+// bubbleXxx() function catches its inner revert via `catch (bytes memory data)`
+// and re-reverts with:
+//
+//	assembly { revert(add(32, data), mload(data)) }
+//
+// These payloads confirm that the assembly pattern passes bytes through
+// unchanged and that DecodeRevertError handles each without a new option.
+func TestAssemblyBubbleUpRealPayloads(t *testing.T) {
+	noParamsEntry := &Entry{Type: Error, Name: "NoParams", Inputs: ParameterArray{}}
+	insufficientEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{
+		{Name: "available", Type: "uint256"},
+		{Name: "required", Type: "uint256"},
+	}}
+	unauthorizedEntry := &Entry{Type: Error, Name: "Unauthorized", Inputs: ParameterArray{
+		{Name: "caller", Type: "address"},
+	}}
+	withStringEntry := &Entry{Type: Error, Name: "WithString", Inputs: ParameterArray{
+		{Name: "message", Type: "string"},
+	}}
+	customABI := ABI{noParamsEntry, insufficientEntry, unauthorizedEntry, withStringEntry}
+
+	tests := []struct {
+		name     string
+		hex      string
+		abi      ABI
+		wantStr  string
+		wantSig  string
+	}{
+		{
+			name:    "Error(string)",
+			hex:     "0x08c379a00000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000001a4e6f7420656e6f7567682045746865722070726f76696465642e000000000000",
+			abi:     ABI{},
+			wantStr: `Error("Not enough Ether provided.")`,
+			wantSig: "Error(string)",
+		},
+		{
+			name:    "Panic(uint256)",
+			hex:     "0x4e487b710000000000000000000000000000000000000000000000000000000000000001",
+			abi:     ABI{},
+			wantStr: `Panic("1")`,
+			wantSig: "Panic(uint256)",
+		},
+		{
+			name:    "NoParams()",
+			hex:     "0xa28f5fc7",
+			abi:     customABI,
+			wantStr: `NoParams()`,
+			wantSig: "NoParams()",
+		},
+		{
+			name:    "InsufficientBalance(uint256,uint256)",
+			hex:     "0xcf479181000000000000000000000000000000000000000000000000000000000000006400000000000000000000000000000000000000000000000000000000000000c8",
+			abi:     customABI,
+			wantStr: `InsufficientBalance("100","200")`,
+			wantSig: "InsufficientBalance(uint256,uint256)",
+		},
+		{
+			name:    "WithString(string)",
+			hex:     "0x64ed940e0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000962616420696e7075740000000000000000000000000000000000000000000000",
+			abi:     customABI,
+			wantStr: `WithString("bad input")`,
+			wantSig: "WithString(string)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			revertData := ethtypes.MustNewHexBytes0xPrefix(tt.hex)
+
+			r := tt.abi.DecodeRevertError(revertData)
+			require.NotNil(t, r)
+			assert.Nil(t, r.GetInnerError(), "assembly bubble-up should produce no nesting")
+			assert.Equal(t, tt.wantStr, r.String())
+
+			sig, err := r.Signature()
+			assert.NoError(t, err)
+			assert.Equal(t, tt.wantSig, sig)
+
+			// SearchForWrappedBinaryErrors must not change the result for non-nested payloads
+			result, ok := tt.abi.ErrorString(revertData, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+			assert.True(t, ok)
+			assert.Equal(t, tt.wantStr, result)
+		})
+	}
+}
+
+func TestAssemblyBubbleUpUnauthorizedAddress(t *testing.T) {
+	// Separate test: address formatting needs its own assertion since the
+	// exact hex representation depends on the serializer's address format.
+	unauthorizedEntry := &Entry{Type: Error, Name: "Unauthorized", Inputs: ParameterArray{
+		{Name: "caller", Type: "address"},
+	}}
+	revertData := ethtypes.MustNewHexBytes0xPrefix(
+		"0x8e4a23d6000000000000000000000000000000000000000000000000000000000000dead")
+
+	r := ABI{unauthorizedEntry}.DecodeRevertError(revertData)
+	require.NotNil(t, r)
+	assert.Nil(t, r.GetInnerError())
+	assert.Equal(t, "Unauthorized", r.ErrorEntry.Name)
+	sig, err := r.Signature()
+	assert.NoError(t, err)
+	assert.Equal(t, "Unauthorized(address)", sig)
+	// Confirm the address value is present in the formatted string
+	assert.Contains(t, r.String(), "dead")
+}
+
+func TestErrorStringAssemblyBubbleUp(t *testing.T) {
+	customEntry := &Entry{Type: Error, Name: "InsufficientBalance", Inputs: ParameterArray{
+		{Name: "available", Type: "uint256"},
+		{Name: "required", Type: "uint256"},
+	}}
+	customABI := ABI{customEntry}
+
+	// Real bytes from eth_call on AssemblyRevertTest.bubbleCustomWithUints()
+	// deployed on Kaleido — identical to a direct InsufficientBalance(100,200) revert.
+	rawErrorBytes := ethtypes.MustNewHexBytes0xPrefix(
+		"0xcf479181" +
+			"0000000000000000000000000000000000000000000000000000000000000064" +
+			"00000000000000000000000000000000000000000000000000000000000000c8")
+
+	// Without Unwrap: legible because the raw bytes ARE the error.
+	result, ok := customABI.ErrorString(rawErrorBytes)
+	assert.True(t, ok)
+	assert.Equal(t, `InsufficientBalance("100","200")`, result)
+
+	// With SearchForWrappedBinaryErrors: same output — no nesting, so result is unchanged.
+	resultUnwrap, ok := customABI.ErrorString(rawErrorBytes, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, result, resultUnwrap)
+
+	// Contrast: wrapping the same error inside Error(string) embeds binary in the string.
+	// Without SearchForWrappedBinaryErrors the string contains raw binary and is not legible.
+	wrappedBytes := buildErrorStringABI(append([]byte("outer: "), rawErrorBytes...))
+	resultWrappedNoUnwrap, ok := customABI.ErrorString(wrappedBytes)
+	assert.True(t, ok)
+	assert.False(t, strings.HasPrefix(resultWrappedNoUnwrap, "InsufficientBalance"),
+		"binary-wrapped error without SearchForWrappedBinaryErrors is not legible")
+
+	// With SearchForWrappedBinaryErrors the inner error is decoded and the result is legible.
+	resultWrappedUnwrap, ok := customABI.ErrorString(wrappedBytes, ErrorFormatOption{SearchForWrappedBinaryErrors: true})
+	assert.True(t, ok)
+	assert.Equal(t, `outer: InsufficientBalance("100","200")`, resultWrappedUnwrap)
+}
+
+func TestSanitizeBinaryString(t *testing.T) {
+	assert.Equal(t, "", SanitizeBinaryString(nil))
+	assert.Equal(t, "", SanitizeBinaryString([]byte{}))
+	assert.Equal(t, "hello world", SanitizeBinaryString([]byte("hello world")))
+	assert.Equal(t, "0xdeadbeef", SanitizeBinaryString([]byte{0xde, 0xad, 0xbe, 0xef}))
+	assert.Equal(t, "0x000000", SanitizeBinaryString([]byte{0x00, 0x00, 0x00}))
+	assert.Equal(t, "0x736f6d65206572726f72000000", SanitizeBinaryString([]byte("some error\x00\x00\x00")))
+	assert.Equal(t, "0x0168656c6c6f", SanitizeBinaryString([]byte{0x01, 'h', 'e', 'l', 'l', 'o'}))
 }
 
 func TestUnnamedInputOutput(t *testing.T) {
