@@ -33,6 +33,27 @@ func (_m *Backend) CallRPC(ctx context.Context, result interface{}, method strin
 	return r0
 }
 
+// CallRPCBatch provides a mock function with given fields: ctx, ops
+func (_m *Backend) CallRPCBatch(ctx context.Context, ops ...*rpcbackend.RPCBatchOp) []*rpcbackend.RPCError {
+	var _ca []interface{}
+	_ca = append(_ca, ctx)
+	for _, op := range ops {
+		_ca = append(_ca, op)
+	}
+	ret := _m.Called(_ca...)
+
+	var r0 []*rpcbackend.RPCError
+	if rf, ok := ret.Get(0).(func(context.Context, ...*rpcbackend.RPCBatchOp) []*rpcbackend.RPCError); ok {
+		r0 = rf(ctx, ops...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*rpcbackend.RPCError)
+		}
+	}
+
+	return r0
+}
+
 // SyncRequest provides a mock function with given fields: ctx, rpcReq
 func (_m *Backend) SyncRequest(ctx context.Context, rpcReq *rpcbackend.RPCRequest) (*rpcbackend.RPCResponse, error) {
 	ret := _m.Called(ctx, rpcReq)
