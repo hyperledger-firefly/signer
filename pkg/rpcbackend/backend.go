@@ -45,6 +45,7 @@ type RPC interface {
 }
 
 type BatchRPC interface {
+	RPC
 	CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RPCError
 }
 
@@ -57,7 +58,6 @@ type RPCBatchOp struct {
 
 // Backend performs communication with a backend
 type Backend interface {
-	RPC
 	BatchRPC
 	SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRes *RPCResponse, err error)
 }
