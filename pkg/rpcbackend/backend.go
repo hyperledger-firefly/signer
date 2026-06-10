@@ -44,9 +44,21 @@ type RPC interface {
 	CallRPC(ctx context.Context, result interface{}, method string, params ...interface{}) *RPCError
 }
 
+type BatchRPC interface {
+	RPC
+	CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RPCError
+}
+
+// RPCBatchOp holds the method, params, and result destination for one call within a batch.
+type RPCBatchOp struct {
+	Result interface{}
+	Method string
+	Params []interface{}
+}
+
 // Backend performs communication with a backend
 type Backend interface {
-	RPC
+	BatchRPC
 	SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRes *RPCResponse, err error)
 }
 
@@ -116,6 +128,19 @@ func (r *RPCResponse) Message() string {
 	return ""
 }
 
+func (rc *RPCClient) reserveConcurrencySlot(ctx context.Context, id any) (func(), *RPCError) {
+	if rc.concurrencySlots == nil {
+		return func() {}, nil
+	}
+	select {
+	case rc.concurrencySlots <- true:
+		return func() { <-rc.concurrencySlots }, nil
+	case <-ctx.Done():
+		err := i18n.NewError(ctx, signermsgs.MsgRequestCanceledContext, id)
+		return nil, &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
+	}
+}
+
 func (rc *RPCClient) allocateRequestID(req *RPCRequest) string {
 	reqID := fmt.Sprintf(`%.9d`, atomic.AddInt64(&rc.requestCounter, 1))
 	req.ID = fftypes.JSONAnyPtr(`"` + reqID + `"`)
@@ -142,24 +167,109 @@ func (rc *RPCClient) CallRPC(ctx context.Context, result interface{}, method str
 	return nil
 }
 
+func fill[T any](arr []T, v T) []T {
+	for i := range arr {
+		arr[i] = v
+	}
+	return arr
+}
+
+func matchBatchResponse(ctx context.Context, rpcRes *RPCResponse, idToIndex map[string]int, ops []*RPCBatchOp, errs []*RPCError, matched []bool) {
+	if rpcRes == nil || rpcRes.ID == nil {
+		return
+	}
+	var idStr string
+	if jsonErr := json.Unmarshal(rpcRes.ID.Bytes(), &idStr); jsonErr != nil {
+		return
+	}
+	idx, ok := idToIndex[idStr]
+	if !ok {
+		return
+	}
+	matched[idx] = true
+	if rpcRes.Error != nil && rpcRes.Error.Code != 0 {
+		errs[idx] = rpcRes.Error
+		return
+	}
+	result := rpcRes.Result
+	if result == nil {
+		result = fftypes.JSONAnyPtr(fftypes.NullString)
+	}
+	if unmarshalErr := json.Unmarshal(result.Bytes(), ops[idx].Result); unmarshalErr != nil {
+		unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, ops[idx].Result, unmarshalErr)
+		errs[idx] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
+	}
+}
+
+func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RPCError {
+	errs := make([]*RPCError, len(ops))
+
+	batchReqs := make([]*RPCRequest, len(ops))
+	idToIndex := make(map[string]int, len(ops))
+	for i, op := range ops {
+		rpcReq, rpcErr := buildRequest(ctx, op.Method, op.Params)
+		if rpcErr != nil {
+			errs[i] = rpcErr
+			return errs
+		}
+		rpcReq.JSONRpc = "2.0"
+		idStr := fmt.Sprintf(`%.9d`, atomic.AddInt64(&rc.requestCounter, 1))
+		rpcReq.ID = fftypes.JSONAnyPtr(`"` + idStr + `"`)
+		batchReqs[i] = rpcReq
+		idToIndex[idStr] = i
+	}
+
+	returnSlot, rpcErr := rc.reserveConcurrencySlot(ctx, "batch")
+	if rpcErr != nil {
+		return fill(errs, rpcErr)
+	}
+	defer returnSlot()
+
+	var batchRes []*RPCResponse
+	log.L(ctx).Debugf("RPC batch[%d] -->", len(ops))
+	rpcStartTime := time.Now()
+	res, err := rc.client.R().
+		SetContext(ctx).
+		SetBody(batchReqs).
+		SetResult(&batchRes).
+		Post("")
+	if err != nil {
+		errMsg := i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, err).Error()
+		log.L(ctx).Errorf("RPC batch[%d] <-- ERROR: %s", len(ops), errMsg)
+		return fill(errs, &RPCError{Code: int64(RPCCodeInternalError), Message: errMsg})
+	}
+	log.L(ctx).Infof("RPC batch[%d] <-- [%d] (%.2fms)", len(ops), res.StatusCode(), float64(time.Since(rpcStartTime))/float64(time.Millisecond))
+	if res.IsError() {
+		errMsg := i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, res.Status()).Error()
+		return fill(errs, &RPCError{Code: int64(RPCCodeInternalError), Message: errMsg})
+	}
+
+	matched := make([]bool, len(ops))
+	for _, rpcRes := range batchRes {
+		matchBatchResponse(ctx, rpcRes, idToIndex, ops, errs, matched)
+	}
+
+	for i, op := range ops {
+		if !matched[i] && errs[i] == nil {
+			err := i18n.NewError(ctx, signermsgs.MsgBatchNoResponse, op.Method, i)
+			errs[i] = &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
+		}
+	}
+
+	return errs
+}
+
 // SyncRequest sends an individual RPC request to the backend (always over HTTP currently),
 // and waits synchronously for the response, or an error.
 //
 // In all return paths *including error paths* the RPCResponse is populated
 // so the caller has an RPC structure to send back to the front-end caller.
 func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRes *RPCResponse, err error) {
-	if rc.concurrencySlots != nil {
-		select {
-		case rc.concurrencySlots <- true:
-			// wait for the concurrency slot and continue
-		case <-ctx.Done():
-			err := i18n.NewError(ctx, signermsgs.MsgRequestCanceledContext, rpcReq.ID)
-			return RPCErrorResponse(err, rpcReq.ID, RPCCodeInternalError), err
-		}
-		defer func() {
-			<-rc.concurrencySlots
-		}()
+	returnSlot, rpcErr := rc.reserveConcurrencySlot(ctx, rpcReq.ID)
+	if rpcErr != nil {
+		return RPCErrorResponse(rpcErr.Error(), rpcReq.ID, RPCCodeInternalError), rpcErr.Error()
 	}
+	defer returnSlot()
 
 	// We always set the back-end request ID - as we need to support requests coming in from
 	// multiple concurrent clients on our front-end that might use clashing IDs.

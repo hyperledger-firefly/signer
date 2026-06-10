@@ -108,4 +108,5 @@ var (
 	MsgInvalidUint64PrecisionLoss  = ffe("FF22090", "String %s cannot be converted to a uint64 without losing precision")
 	MsgInvalidJSONTypeForBigInt    = ffe("FF22091", "JSON parsed '%T' cannot be converted to an integer")
 	MsgHexUintNegative             = ffe("FF22092", "Cannot convert negative integer %d to unsigned")
+	MsgBatchNoResponse             = ffe("FF22093", "No response received in batch for method %s at index %d")
 )

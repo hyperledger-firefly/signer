@@ -271,6 +271,241 @@ func TestSafeMessageGetter(t *testing.T) {
 	assert.Empty(t, (&RPCResponse{}).Message())
 }
 
+type testBatchRPCHandler func(rpcReqs []*RPCRequest) (int, []*RPCResponse)
+
+func newBatchTestServer(t *testing.T, rpcHandler testBatchRPCHandler) (context.Context, *RPCClient, func()) {
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var rpcReqs []*RPCRequest
+		err := json.NewDecoder(r.Body).Decode(&rpcReqs)
+		assert.NoError(t, err)
+
+		status, rpcResps := rpcHandler(rpcReqs)
+		b, err := json.Marshal(rpcResps)
+		assert.NoError(t, err)
+		w.Header().Add("Content-Type", "application/json")
+		w.Header().Add("Content-Length", strconv.Itoa(len(b)))
+		w.WriteHeader(status)
+		w.Write(b)
+	}))
+
+	signerconfig.Reset()
+	prefix := signerconfig.BackendConfig
+	prefix.Set(ffresty.HTTPConfigURL, fmt.Sprintf("http://%s", server.Listener.Addr()))
+	c, err := ffresty.New(ctx, signerconfig.BackendConfig)
+	assert.NoError(t, err)
+	rb := NewRPCClient(c).(*RPCClient)
+
+	return ctx, rb, func() {
+		cancelCtx()
+		server.Close()
+	}
+}
+
+func TestBatchRPCCallOK(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		assert.Len(t, rpcReqs, 2)
+		assert.Equal(t, "eth_blockNumber", rpcReqs[0].Method)
+		assert.Equal(t, "eth_chainId", rpcReqs[1].Method)
+		// Return out of order to verify ID-based matching
+		return 200, []*RPCResponse{
+			{JSONRpc: "2.0", ID: rpcReqs[1].ID, Result: fftypes.JSONAnyPtr(`"0x1"`)},
+			{JSONRpc: "2.0", ID: rpcReqs[0].ID, Result: fftypes.JSONAnyPtr(`"0x100"`)},
+		}
+	})
+	defer done()
+
+	var blockNumber ethtypes.HexInteger
+	var chainID ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx,
+		&RPCBatchOp{Result: &blockNumber, Method: "eth_blockNumber"},
+		&RPCBatchOp{Result: &chainID, Method: "eth_chainId"},
+	)
+	assert.Nil(t, errs[0])
+	assert.Nil(t, errs[1])
+	assert.Equal(t, int64(0x100), blockNumber.BigInt().Int64())
+	assert.Equal(t, int64(0x1), chainID.BigInt().Int64())
+}
+
+func TestBatchRPCCallPartialError(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 200, []*RPCResponse{
+			{JSONRpc: "2.0", ID: rpcReqs[0].ID, Result: fftypes.JSONAnyPtr(`"0x26"`)},
+			{JSONRpc: "2.0", ID: rpcReqs[1].ID, Error: &RPCError{Code: -32000, Message: "not found"}},
+		}
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	var blockResult ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx,
+		&RPCBatchOp{Result: &txCount, Method: "eth_getTransactionCount", Params: []interface{}{"0xaddr", "pending"}},
+		&RPCBatchOp{Result: &blockResult, Method: "eth_getBlockByHash", Params: []interface{}{"0xbad", false}},
+	)
+	assert.Nil(t, errs[0])
+	assert.Regexp(t, "not found", errs[1])
+	assert.Equal(t, int64(0x26), txCount.BigInt().Int64())
+}
+
+func TestBatchRPCCallBadInput(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 500, nil
+	})
+	defer done()
+
+	var result ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx,
+		&RPCBatchOp{Result: &result, Method: "eth_test", Params: []interface{}{map[bool]bool{false: true}}},
+	)
+	assert.Regexp(t, "FF22011", errs[0])
+}
+
+func TestBatchRPCCallServerDown(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 500, nil
+	})
+	done()
+
+	var result ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx,
+		&RPCBatchOp{Result: &result, Method: "eth_blockNumber"},
+	)
+	assert.Regexp(t, "FF22012", errs[0])
+}
+
+func TestBatchRPCCallConcurrencyCancel(t *testing.T) {
+	blocked := make(chan struct{})
+	blocking := make(chan bool, 1)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		blocking <- true
+		<-blocked
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(500)
+		w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	signerconfig.Reset()
+	signerconfig.BackendConfig.Set(ffresty.HTTPConfigURL, server.URL)
+	c, err := ffresty.New(ctx, signerconfig.BackendConfig)
+	assert.NoError(t, err)
+	rb := NewRPCClientWithOption(c, RPCClientOptions{MaxConcurrentRequest: 1}).(*RPCClient)
+
+	bgDone := make(chan struct{})
+	go func() {
+		_, err := rb.SyncRequest(ctx, &RPCRequest{})
+		assert.Regexp(t, "FF22012", err)
+		close(bgDone)
+	}()
+	<-blocking
+
+	cancelCtx()
+	var result ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx, &RPCBatchOp{Result: &result, Method: "eth_blockNumber"})
+	assert.Regexp(t, "FF22063", errs[0])
+
+	close(blocked)
+	<-bgDone
+}
+
+func TestBatchRPCCallHTTPError(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 500, nil
+	})
+	defer done()
+
+	var result ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx, &RPCBatchOp{Result: &result, Method: "eth_blockNumber"})
+	assert.Regexp(t, "FF22012", errs[0])
+}
+
+func TestBatchRPCCallNoResponse(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 200, []*RPCResponse{} // empty — no op matched
+	})
+	defer done()
+
+	var result ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx, &RPCBatchOp{Result: &result, Method: "eth_blockNumber"})
+	assert.Regexp(t, "FF22093", errs[0])
+}
+
+func TestMatchBatchResponseNilResponse(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	matchBatchResponse(context.Background(), nil, map[string]int{}, nil, errs, matched)
+	assert.Nil(t, errs[0])
+	assert.False(t, matched[0])
+}
+
+func TestMatchBatchResponseNilID(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	matchBatchResponse(context.Background(), &RPCResponse{}, map[string]int{}, nil, errs, matched)
+	assert.Nil(t, errs[0])
+	assert.False(t, matched[0])
+}
+
+func TestMatchBatchResponseNonStringID(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	rpcRes := &RPCResponse{ID: fftypes.JSONAnyPtr("123")} // JSON number — unmarshal into string fails
+	matchBatchResponse(context.Background(), rpcRes, map[string]int{"123": 0}, nil, errs, matched)
+	assert.Nil(t, errs[0])
+	assert.False(t, matched[0])
+}
+
+func TestMatchBatchResponseUnknownID(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	rpcRes := &RPCResponse{ID: fftypes.JSONAnyPtr(`"unknown"`)}
+	matchBatchResponse(context.Background(), rpcRes, map[string]int{"other": 0}, nil, errs, matched)
+	assert.Nil(t, errs[0])
+	assert.False(t, matched[0])
+}
+
+func TestMatchBatchResponseRPCError(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	ops := []*RPCBatchOp{{Result: new(ethtypes.HexInteger), Method: "eth_test"}}
+	rpcRes := &RPCResponse{
+		ID:    fftypes.JSONAnyPtr(`"000000001"`),
+		Error: &RPCError{Code: -32000, Message: "oops"},
+	}
+	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
+	assert.True(t, matched[0])
+	assert.Regexp(t, "oops", errs[0])
+}
+
+func TestMatchBatchResponseNullResult(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	var rawResult *fftypes.JSONAny
+	ops := []*RPCBatchOp{{Result: &rawResult, Method: "eth_test"}}
+	rpcRes := &RPCResponse{
+		ID:     fftypes.JSONAnyPtr(`"000000001"`),
+		Result: nil,
+	}
+	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
+	assert.True(t, matched[0])
+	assert.Nil(t, errs[0])
+}
+
+func TestMatchBatchResponseUnmarshalFail(t *testing.T) {
+	errs := make([]*RPCError, 1)
+	matched := make([]bool, 1)
+	var mapResult map[string]interface{}
+	ops := []*RPCBatchOp{{Result: &mapResult, Method: "eth_test"}}
+	rpcRes := &RPCResponse{
+		ID:     fftypes.JSONAnyPtr(`"000000001"`),
+		Result: fftypes.JSONAnyPtr(`"not-an-object"`),
+	}
+	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
+	assert.True(t, matched[0])
+	assert.Regexp(t, "FF22065", errs[0])
+}
+
 func TestSyncRequestConcurrency(t *testing.T) {
 
 	blocked := make(chan struct{})
