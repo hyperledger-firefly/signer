@@ -56,6 +56,14 @@ type RPCBatchOp struct {
 	Params []interface{}
 }
 
+// RPCBatchOpTyped is the typed equivalent of RPCBatchOp for use with CallRPCBatchTyped.
+// All ops in a typed batch must share the same result type T.
+type RPCBatchOpTyped[T any] struct {
+	Result *T
+	Method string
+	Params []interface{}
+}
+
 // Backend performs communication with a backend
 type Backend interface {
 	BatchRPC
@@ -180,7 +188,7 @@ func fill[T any](arr []T, v T) []T {
 	return arr
 }
 
-func matchBatchResponse(ctx context.Context, rpcRes *RPCResponse, idToIndex map[string]int, ops []*RPCBatchOp, errs []*RPCError, matched []bool) {
+func matchBatchResponse[T any](rpcRes *RPCResponseTyped[T], idToIndex map[string]int, ops []*RPCBatchOpTyped[T], errs []*RPCError, matched []bool) {
 	if rpcRes == nil || rpcRes.ID == nil {
 		return
 	}
@@ -197,17 +205,40 @@ func matchBatchResponse(ctx context.Context, rpcRes *RPCResponse, idToIndex map[
 		errs[idx] = rpcRes.Error
 		return
 	}
-	result := rpcRes.Result
-	if result == nil {
-		result = fftypes.JSONAnyPtr(fftypes.NullString)
-	}
-	if unmarshalErr := json.Unmarshal(result.Bytes(), ops[idx].Result); unmarshalErr != nil {
-		unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, ops[idx].Result, unmarshalErr)
-		errs[idx] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
-	}
+	*ops[idx].Result = rpcRes.Result
 }
 
 func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RPCError {
+	typedOps := make([]*RPCBatchOpTyped[*fftypes.JSONAny], len(ops))
+	intermediates := make([]*fftypes.JSONAny, len(ops))
+	for i, op := range ops {
+		typedOps[i] = &RPCBatchOpTyped[*fftypes.JSONAny]{
+			Result: &intermediates[i],
+			Method: op.Method,
+			Params: op.Params,
+		}
+	}
+	errs := CallRPCBatchTyped(ctx, rc, typedOps...)
+	for i, op := range ops {
+		if errs[i] != nil {
+			continue
+		}
+		result := intermediates[i]
+		if result == nil {
+			result = fftypes.JSONAnyPtr(fftypes.NullString)
+		}
+		if unmarshalErr := json.Unmarshal(result.Bytes(), op.Result); unmarshalErr != nil {
+			unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, op.Result, unmarshalErr)
+			errs[i] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
+		}
+	}
+	return errs
+}
+
+// CallRPCBatchTyped sends a JSON-RPC batch where every operation decodes its result directly
+// into T, bypassing the fftypes.JSONAny intermediate used by CallRPCBatch.
+// All ops in the batch must share the same result type.
+func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBatchOpTyped[T]) []*RPCError {
 	errs := make([]*RPCError, len(ops))
 
 	batchReqs := make([]*RPCRequest, len(ops))
@@ -231,7 +262,7 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 	}
 	defer returnSlot()
 
-	var batchRes []*RPCResponse
+	var batchRes []*RPCResponseTyped[T]
 	log.L(ctx).Debugf("RPC batch[%d] -->", len(ops))
 	rpcStartTime := time.Now()
 	res, err := rc.client.R().
@@ -252,7 +283,7 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 
 	matched := make([]bool, len(ops))
 	for _, rpcRes := range batchRes {
-		matchBatchResponse(ctx, rpcRes, idToIndex, ops, errs, matched)
+		matchBatchResponse(rpcRes, idToIndex, ops, errs, matched)
 	}
 
 	for i, op := range ops {
