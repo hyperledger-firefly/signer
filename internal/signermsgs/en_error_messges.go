@@ -100,7 +100,7 @@ var (
 	MsgUnsupportedTransactionType  = ffe("FF22082", "Unsupported transaction type 0x%02x")
 	MsgInvalidLegacyTransaction    = ffe("FF22083", "Transaction payload invalid (legacy): %v")
 	MsgInvalidEIP1559Transaction   = ffe("FF22084", "Transaction payload invalid (EIP-1559): %v")
-	MsgInvalidEIP155TransactionV   = ffe("FF22085", "Invalid V value from EIP-155 transaction (chainId=%d)")
+	MsgInvalidEIP155TransactionV   = ffe("FF22085", "Invalid V value from EIP-155 transaction (chainId=%d, V=%d)")
 	MsgInvalidChainID              = ffe("FF22086", "Invalid chainId expected=%d actual=%d")
 	MsgSigningInvalidCompactRSV    = ffe("FF22087", "Invalid signature data (compact R,S,V) length=%d (expected=65)")
 	MsgInvalidNumberString         = ffe("FF22088", "Invalid integer string '%s'")

@@ -45,15 +45,23 @@ func TestGeneratedKeyRoundTrip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)
 
+	err = sig.UpdateOriginal() // this should be a no-op for 27/28
+	assert.NoError(t, err)
+	addr, err = sig.Recover(data, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, keypair.Address, *addr)
+
 	// Latest 0/1 - EIP-1559 / EIP-2930
-	sig.UpdateEIP2930()
+	err = sig.UpdateEIP2930()
+	assert.NoError(t, err)
 	addr, err = sig.Recover(data, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)
 	sig.V.SetInt64(sig.V.Int64() + 27)
 
 	// Chain ID encoded in V value - EIP-155
-	sig.UpdateEIP155(1001)
+	err = sig.UpdateEIP155(1001)
+	assert.NoError(t, err)
 	addr, err = sig.Recover(data, 1001)
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)
