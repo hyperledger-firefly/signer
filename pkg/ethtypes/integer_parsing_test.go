@@ -18,6 +18,7 @@ package ethtypes
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,4 +44,17 @@ func TestIntegerParsing(t *testing.T) {
 
 	_, err = BigIntegerFromString(ctx, "3.0000000000000000000000000000003")
 	assert.Regexp(t, "FF22089", err)
+
+	// big.Rat handles e-notation exactly — "1e10" is 10^10, no float rounding
+	i, err = BigIntegerFromString(ctx, "1e10")
+	assert.NoError(t, err)
+	assert.Equal(t, "10000000000", i.String())
+
+	// Non-integer rational is a precision-loss error
+	_, err = BigIntegerFromString(ctx, "1.5")
+	assert.Regexp(t, "FF22089", err)
+
+	// String exceeding 100 chars is rejected before Rat.SetString (CVE-2022-23772 guard)
+	_, err = BigIntegerFromString(ctx, "1."+strings.Repeat("0", 99)+"1e+100")
+	assert.Regexp(t, "FF22088", err)
 }
