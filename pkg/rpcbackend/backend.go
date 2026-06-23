@@ -56,6 +56,14 @@ type RPCBatchOp struct {
 	Params []interface{}
 }
 
+// RPCBatchOpTyped is the typed equivalent of RPCBatchOp for use with CallRPCBatchTyped.
+// All ops in a typed batch must share the same result type T.
+type RPCBatchOpTyped[T any] struct {
+	Result *T
+	Method string
+	Params []interface{}
+}
+
 // Backend performs communication with a backend
 type Backend interface {
 	BatchRPC
@@ -111,22 +119,28 @@ func (e *RPCError) String() string {
 	return e.Message
 }
 
-type RPCResponse struct {
+// RPCResponseTyped is a JSON-RPC response envelope that decodes Result directly
+// into T, bypassing the fftypes.JSONAny intermediate used by RPCResponse.
+type RPCResponseTyped[T any] struct {
 	JSONRpc string           `json:"jsonrpc"`
 	ID      *fftypes.JSONAny `json:"id"`
-	Result  *fftypes.JSONAny `json:"result,omitempty"`
+	Result  T                `json:"result,omitempty"`
 	Error   *RPCError        `json:"error,omitempty"`
 	// Only for subscription notifications
 	Method string           `json:"method,omitempty"`
 	Params *fftypes.JSONAny `json:"params,omitempty"`
 }
 
-func (r *RPCResponse) Message() string {
+func (r *RPCResponseTyped[T]) Message() string {
 	if r.Error != nil {
 		return r.Error.Message
 	}
 	return ""
 }
+
+// RPCResponse is the standard JSON-RPC response type, where Result is captured
+// as raw bytes in a fftypes.JSONAny for a second json.Unmarshal by the caller.
+type RPCResponse = RPCResponseTyped[*fftypes.JSONAny]
 
 func (rc *RPCClient) reserveConcurrencySlot(ctx context.Context, id any) (func(), *RPCError) {
 	if rc.concurrencySlots == nil {
@@ -174,7 +188,7 @@ func fill[T any](arr []T, v T) []T {
 	return arr
 }
 
-func matchBatchResponse(ctx context.Context, rpcRes *RPCResponse, idToIndex map[string]int, ops []*RPCBatchOp, errs []*RPCError, matched []bool) {
+func matchBatchResponse[T any](rpcRes *RPCResponseTyped[T], idToIndex map[string]int, ops []*RPCBatchOpTyped[T], errs []*RPCError, matched []bool) {
 	if rpcRes == nil || rpcRes.ID == nil {
 		return
 	}
@@ -191,17 +205,40 @@ func matchBatchResponse(ctx context.Context, rpcRes *RPCResponse, idToIndex map[
 		errs[idx] = rpcRes.Error
 		return
 	}
-	result := rpcRes.Result
-	if result == nil {
-		result = fftypes.JSONAnyPtr(fftypes.NullString)
-	}
-	if unmarshalErr := json.Unmarshal(result.Bytes(), ops[idx].Result); unmarshalErr != nil {
-		unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, ops[idx].Result, unmarshalErr)
-		errs[idx] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
-	}
+	*ops[idx].Result = rpcRes.Result
 }
 
 func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RPCError {
+	typedOps := make([]*RPCBatchOpTyped[*fftypes.JSONAny], len(ops))
+	intermediates := make([]*fftypes.JSONAny, len(ops))
+	for i, op := range ops {
+		typedOps[i] = &RPCBatchOpTyped[*fftypes.JSONAny]{
+			Result: &intermediates[i],
+			Method: op.Method,
+			Params: op.Params,
+		}
+	}
+	errs := CallRPCBatchTyped(ctx, rc, typedOps...)
+	for i, op := range ops {
+		if errs[i] != nil {
+			continue
+		}
+		result := intermediates[i]
+		if result == nil {
+			result = fftypes.JSONAnyPtr(fftypes.NullString)
+		}
+		if unmarshalErr := json.Unmarshal(result.Bytes(), op.Result); unmarshalErr != nil {
+			unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, op.Result, unmarshalErr)
+			errs[i] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
+		}
+	}
+	return errs
+}
+
+// CallRPCBatchTyped sends a JSON-RPC batch where every operation decodes its result directly
+// into T, bypassing the fftypes.JSONAny intermediate used by CallRPCBatch.
+// All ops in the batch must share the same result type.
+func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBatchOpTyped[T]) []*RPCError {
 	errs := make([]*RPCError, len(ops))
 
 	batchReqs := make([]*RPCRequest, len(ops))
@@ -225,7 +262,7 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 	}
 	defer returnSlot()
 
-	var batchRes []*RPCResponse
+	var batchRes []*RPCResponseTyped[T]
 	log.L(ctx).Debugf("RPC batch[%d] -->", len(ops))
 	rpcStartTime := time.Now()
 	res, err := rc.client.R().
@@ -246,7 +283,7 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 
 	matched := make([]bool, len(ops))
 	for _, rpcRes := range batchRes {
-		matchBatchResponse(ctx, rpcRes, idToIndex, ops, errs, matched)
+		matchBatchResponse(rpcRes, idToIndex, ops, errs, matched)
 	}
 
 	for i, op := range ops {
@@ -259,15 +296,15 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 	return errs
 }
 
-// SyncRequest sends an individual RPC request to the backend (always over HTTP currently),
-// and waits synchronously for the response, or an error.
-//
-// In all return paths *including error paths* the RPCResponse is populated
-// so the caller has an RPC structure to send back to the front-end caller.
-func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRes *RPCResponse, err error) {
+// syncRequestTyped is the canonical implementation of a single JSON-RPC round-trip.
+// It owns the concurrency slot, request ID allocation, logging, and HTTP call.
+// SyncRequest and CallRPCTyped are thin wrappers around it.
+func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequest) (rpcRes RPCResponseTyped[T], err error) {
 	returnSlot, rpcErr := rc.reserveConcurrencySlot(ctx, rpcReq.ID)
 	if rpcErr != nil {
-		return RPCErrorResponse(rpcErr.Error(), rpcReq.ID, RPCCodeInternalError), rpcErr.Error()
+		rpcRes.ID = rpcReq.ID
+		rpcRes.Error = rpcErr
+		return rpcRes, rpcErr.Error()
 	}
 	defer returnSlot()
 
@@ -281,28 +318,26 @@ func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRe
 		rpcTraceID = fmt.Sprintf("%s->%s", rpcReq.ID, rpcTraceID)
 	}
 
-	rpcRes = new(RPCResponse)
-
 	log.L(ctx).Debugf("RPC[%s] --> %s", rpcTraceID, rpcReq.Method)
 	if logrus.IsLevelEnabled(logrus.TraceLevel) {
 		jsonInput, _ := json.Marshal(rpcReq)
 		log.L(ctx).Tracef("RPC[%s] INPUT: %s", rpcTraceID, jsonInput)
 	}
 	rpcStartTime := time.Now()
-	res, err := rc.client.R().
+	res, httpErr := rc.client.R().
 		SetContext(ctx).
 		SetBody(beReq).
 		SetResult(&rpcRes).
-		SetError(rpcRes).
+		SetError(&rpcRes).
 		Post("")
 
 	// Restore the original ID
 	rpcRes.ID = rpcReq.ID
-	if err != nil {
-		err := i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, err)
-		log.L(ctx).Errorf("RPC[%s] <-- ERROR: %s", rpcTraceID, err)
-		rpcRes = RPCErrorResponse(err, rpcReq.ID, RPCCodeInternalError)
-		return rpcRes, err
+	if httpErr != nil {
+		httpErr = i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, httpErr)
+		log.L(ctx).Errorf("RPC[%s] <-- ERROR: %s", rpcTraceID, httpErr)
+		rpcRes.Error = &RPCError{Code: int64(RPCCodeInternalError), Message: httpErr.Error()}
+		return rpcRes, httpErr
 	}
 	if logrus.IsLevelEnabled(logrus.TraceLevel) {
 		jsonOutput, _ := json.Marshal(rpcRes)
@@ -319,15 +354,45 @@ func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (rpcRe
 			rpcMsg = i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, res.Status()).Error()
 		}
 		log.L(ctx).Errorf("RPC[%s] <-- [%d]: %s", rpcTraceID, res.StatusCode(), errLog)
-		err := errors.New(rpcMsg)
-		return rpcRes, err
+		return rpcRes, errors.New(rpcMsg)
 	}
 	log.L(ctx).Infof("RPC[%s] <-- %s [%d] OK (%.2fms)", rpcTraceID, rpcReq.Method, res.StatusCode(), float64(time.Since(rpcStartTime))/float64(time.Millisecond))
+	return rpcRes, nil
+}
+
+// SyncRequest sends an individual RPC request to the backend (always over HTTP currently),
+// and waits synchronously for the response, or an error.
+//
+// In all return paths *including error paths* the RPCResponse is populated
+// so the caller has an RPC structure to send back to the front-end caller.
+func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (*RPCResponse, error) {
+	rpcRes, err := syncRequestTyped[*fftypes.JSONAny](ctx, rc, rpcReq)
+	if err != nil {
+		return &rpcRes, err
+	}
 	if rpcRes.Result == nil {
 		// We don't want a result for errors, but a null success response needs to go in there
 		rpcRes.Result = fftypes.JSONAnyPtr(fftypes.NullString)
 	}
-	return rpcRes, nil
+	return &rpcRes, nil
+}
+
+// CallRPCTyped performs a single JSON-RPC call and decodes the result directly into T.
+// More efficient than parsing into generic JSON bytes result structure first.
+func CallRPCTyped[T any](ctx context.Context, rc *RPCClient, result *T, method string, params ...interface{}) *RPCError {
+	rpcReq, rpcErr := buildRequest(ctx, method, params)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	typed, err := syncRequestTyped[T](ctx, rc, rpcReq)
+	if err != nil {
+		if typed.Error != nil && typed.Error.Code != 0 {
+			return typed.Error
+		}
+		return &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
+	}
+	*result = typed.Result
+	return nil
 }
 
 func RPCErrorResponse(err error, id *fftypes.JSONAny, code RPCCode) *RPCResponse {
