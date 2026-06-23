@@ -465,6 +465,50 @@ func TestMatchBatchResponseUnknownID(t *testing.T) {
 	assert.False(t, matched[0])
 }
 
+func TestCallRPCTypedOK(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) {
+		return 200, &RPCResponse{
+			JSONRpc: "2.0",
+			ID:      rpcReq.ID,
+			Result:  fftypes.JSONAnyPtr(`"0x26"`),
+		}
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "eth_getTransactionCount", ethtypes.MustNewAddress("0xfb075bb99f2aa4c49955bf703509a227d7a12248"), "pending")
+	assert.Nil(t, rpcErr)
+	assert.Equal(t, int64(0x26), txCount.BigInt().Int64())
+}
+
+func TestCallRPCTypedRPCError(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) {
+		return 200, &RPCResponse{
+			JSONRpc: "2.0",
+			ID:      rpcReq.ID,
+			Error:   &RPCError{Code: -32000, Message: "not found"},
+		}
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "eth_getTransactionByHash", "0x1234")
+	assert.Regexp(t, "not found", rpcErr.Error())
+	assert.Equal(t, int64(-32000), rpcErr.Code)
+}
+
+func TestCallRPCTypedBadInput(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) { return 500, nil })
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "test-bad-params", map[bool]bool{false: true})
+	assert.Regexp(t, "FF22011", rpcErr.Error())
+}
+
 func TestMatchBatchResponseRPCError(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
