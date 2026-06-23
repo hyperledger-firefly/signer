@@ -62,7 +62,7 @@ func (s *SignatureData) getVNormalized(chainID int64) (byte, error) {
 	return vB, nil
 }
 
-func (s *SignatureData) setVToYParity() error {
+func (s *SignatureData) normalizeVToYParity() error {
 	switch s.V.Int64() {
 	case 0, 1:
 		// do nothing
@@ -90,7 +90,7 @@ func (s *SignatureData) UpdateOriginal() error {
 func (s *SignatureData) UpdateEIP155(chainID int64) error {
 	chainIDx2 := big.NewInt(chainID)
 	chainIDx2 = chainIDx2.Mul(chainIDx2, big.NewInt(2))
-	err := s.setVToYParity()
+	err := s.normalizeVToYParity()
 	if err != nil {
 		return err
 	}
@@ -100,7 +100,7 @@ func (s *SignatureData) UpdateEIP155(chainID int64) error {
 
 // EIP-2930 (/ EIP-1559) rules - 0 or 1 V value for raw Y-parity value (chainID goes into the payload)
 func (s *SignatureData) UpdateEIP2930() error {
-	return s.setVToYParity()
+	return s.normalizeVToYParity()
 }
 
 // Recover obtains the original signer from the hash of the message
