@@ -32,18 +32,24 @@ func BigIntegerFromString(ctx context.Context, s string) (*big.Int, error) {
 	// no prefix means decimal etc.
 	i, ok := new(big.Int).SetString(s, 0)
 	if !ok {
-		f, _, err := big.ParseFloat(s, 10, 256, big.ToNearestEven)
-		if err != nil {
-			log.L(ctx).Errorf("Error parsing numeric string '%s': %s", s, err)
+		// Fallback for decimal floats and scientific notation (e.g. "12345.0", "1e10").
+		// big.Rat gives exact rational arithmetic — no precision limit or rounding mode.
+		// Guard length before SetString to prevent unbounded memory use (CVE-2022-23772).
+		// uint256 max is 78 decimal digits; float notation adds at most a sign, decimal
+		// point, and exponent ("e+77"), so any valid value fits within 100 characters.
+		if len(s) > 100 {
+			log.L(ctx).Errorf("Error parsing numeric string '%s'", s)
 			return nil, i18n.NewError(ctx, signermsgs.MsgInvalidNumberString, s)
 		}
-		i, accuracy := f.Int(i)
-		if accuracy != big.Exact {
-			// If we weren't able to decode without losing precision, return an error
+		r, ok := new(big.Rat).SetString(s) //nolint:gosec // G113: input bounded to 100 chars by the guard above
+		if !ok {
+			log.L(ctx).Errorf("Error parsing numeric string '%s'", s)
+			return nil, i18n.NewError(ctx, signermsgs.MsgInvalidNumberString, s)
+		}
+		if !r.IsInt() {
 			return nil, i18n.NewError(ctx, signermsgs.MsgInvalidIntPrecisionLoss, s)
 		}
-
-		return i, nil
+		return r.Num(), nil
 	}
 	return i, nil
 }
