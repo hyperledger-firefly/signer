@@ -68,7 +68,29 @@ func TestRecordRPCRequestNoOpWhenDisabled(t *testing.T) {
 	ctx := context.Background()
 
 	assert.NotPanics(t, func() {
-		recordRPCRequest(ctx, "eth_blockNumber", statusOK, 10*time.Millisecond)
+		recordRPCRequest(ctx, "eth_blockNumber", statusOK, false, 10*time.Millisecond)
+	})
+}
+
+func TestRecordRPCBatchNoOpWhenDisabled(t *testing.T) {
+	defer resetRPCMetrics()
+	ctx := context.Background()
+
+	assert.NotPanics(t, func() {
+		recordRPCBatchSize(ctx, 3)
+	})
+}
+
+func TestRecordRPCBatchEmitWhenEnabled(t *testing.T) {
+	defer resetRPCMetrics()
+	ctx := context.Background()
+	mr := metric.NewPrometheusMetricsRegistry("test_rpcbackend_batch")
+	EnableMetrics(ctx, mr)
+
+	assert.NotPanics(t, func() {
+		recordRPCBatchSize(ctx, 1)
+		recordRPCBatchSize(ctx, 25)
+		recordRPCBatchSize(ctx, 0)
 	})
 }
 
@@ -79,9 +101,9 @@ func TestRecordRPCRequestEmitWhenEnabled(t *testing.T) {
 	EnableMetrics(ctx, mr)
 
 	assert.NotPanics(t, func() {
-		recordRPCRequest(ctx, "eth_blockNumber", "200", 25*time.Millisecond)
-		recordRPCRequest(ctx, "", statusTransportError, time.Millisecond)
-		recordRPCRequest(ctx, "eth_call", statusFromRPCError(-32000), 5*time.Millisecond)
+		recordRPCRequest(ctx, "eth_blockNumber", "200", false, 25*time.Millisecond)
+		recordRPCRequest(ctx, "", statusTransportError, false, time.Millisecond)
+		recordRPCRequest(ctx, "eth_call", statusFromRPCError(-32000), false, 5*time.Millisecond)
 	})
 }
 

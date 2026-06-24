@@ -30,9 +30,11 @@ const (
 
 	metricCounterRPCRequestTotal        = "rpc_request_total"
 	metricHistogramRPCRequestDurationMs = "rpc_request_duration_milliseconds"
+	metricHistogramRPCBatchSize         = "rpc_batch_size"
 
 	labelMethod = "method"
 	labelStatus = "status"
+	labelBatch  = "batch"
 
 	statusTransportError = "transport_error"
 	statusCanceled       = "canceled"
@@ -43,11 +45,14 @@ const (
 
 var rpcMetrics metric.MetricsManager
 
-var rpcRequestLabels = []string{labelMethod, labelStatus}
+var rpcRequestLabels = []string{labelMethod, labelStatus, labelBatch}
 var rpcDurationLabels = []string{labelMethod}
 
 // rpcDurationMsBuckets covers fast local RPC through slow remote node calls.
 var rpcDurationMsBuckets = []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000}
+
+// rpcBatchSizeBuckets covers typical JSON-RPC HTTP batch sizes.
+var rpcBatchSizeBuckets = []float64{1, 2, 5, 10, 25, 50, 100}
 
 func durationMs(d time.Duration) float64 {
 	return float64(d) / float64(time.Millisecond)
@@ -88,9 +93,10 @@ func EnableMetrics(ctx context.Context, metricsRegistry metric.MetricsRegistry) 
 
 	rpcMetrics.NewCounterMetricWithLabels(ctx, metricCounterRPCRequestTotal, "Total number of RPC backend requests", rpcRequestLabels, false)
 	rpcMetrics.NewHistogramMetricWithLabels(ctx, metricHistogramRPCRequestDurationMs, "Duration of RPC backend requests in milliseconds", rpcDurationMsBuckets, rpcDurationLabels, false)
+	rpcMetrics.NewHistogramMetric(ctx, metricHistogramRPCBatchSize, "Number of RPC calls per HTTP batch request", rpcBatchSizeBuckets, false)
 }
 
-func recordRPCRequest(ctx context.Context, method, status string, duration time.Duration) {
+func recordRPCRequest(ctx context.Context, method, status string, batch bool, duration time.Duration) {
 	if rpcMetrics == nil {
 		return
 	}
@@ -98,9 +104,17 @@ func recordRPCRequest(ctx context.Context, method, status string, duration time.
 	labels := map[string]string{
 		labelMethod: method,
 		labelStatus: status,
+		labelBatch:  strconv.FormatBool(batch),
 	}
 	rpcMetrics.IncCounterMetricWithLabels(ctx, metricCounterRPCRequestTotal, labels, nil)
 	rpcMetrics.ObserveHistogramMetricWithLabels(ctx, metricHistogramRPCRequestDurationMs, durationMs(duration), map[string]string{
 		labelMethod: method,
 	}, nil)
+}
+
+func recordRPCBatchSize(ctx context.Context, batchSize int) {
+	if rpcMetrics == nil || batchSize <= 0 {
+		return
+	}
+	rpcMetrics.ObserveHistogramMetric(ctx, metricHistogramRPCBatchSize, float64(batchSize), nil)
 }
