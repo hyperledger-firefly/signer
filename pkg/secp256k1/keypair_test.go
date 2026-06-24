@@ -45,15 +45,35 @@ func TestGeneratedKeyRoundTrip(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)
 
+	err = sig.UpdateOriginal() // this should be a no-op for 27/28
+	assert.NoError(t, err)
+	addr, err = sig.Recover(data, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, keypair.Address, *addr)
+
+	// For V that's 0/1, we should get the same address
+	if sig.V.Int64() == 27 {
+		sig.V.SetInt64(0)
+	} else if sig.V.Int64() == 28 {
+		sig.V.SetInt64(1)
+	} else {
+		t.Fatalf("unexpected V value: %d (must be 27/28 as btcec was used for signing)", sig.V.Int64())
+	}
+	addr, err = sig.Recover(data, 0)
+	assert.NoError(t, err)
+	assert.Equal(t, keypair.Address, *addr)
+
 	// Latest 0/1 - EIP-1559 / EIP-2930
-	sig.UpdateEIP2930()
+	err = sig.UpdateEIP2930()
+	assert.NoError(t, err)
 	addr, err = sig.Recover(data, 0)
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)
 	sig.V.SetInt64(sig.V.Int64() + 27)
 
 	// Chain ID encoded in V value - EIP-155
-	sig.UpdateEIP155(1001)
+	err = sig.UpdateEIP155(1001)
+	assert.NoError(t, err)
 	addr, err = sig.Recover(data, 1001)
 	assert.NoError(t, err)
 	assert.Equal(t, keypair.Address, *addr)

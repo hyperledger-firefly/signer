@@ -43,6 +43,11 @@ func SignTypedDataV4(ctx context.Context, signer secp256k1.SignerDirect, payload
 		return nil, err
 	}
 
+	err = sig.UpdateOriginal()
+	if err != nil {
+		return nil, err
+	}
+
 	signatureBytes := make([]byte, 65)
 	sig.R.FillBytes(signatureBytes[0:32])
 	sig.S.FillBytes(signatureBytes[32:64])

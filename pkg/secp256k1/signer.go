@@ -62,20 +62,45 @@ func (s *SignatureData) getVNormalized(chainID int64) (byte, error) {
 	return vB, nil
 }
 
-// EIP-155 rules - 2xChainID + 35 - starting point must be legacy 27/28
-func (s *SignatureData) UpdateEIP155(chainID int64) {
+func (s *SignatureData) normalizeVToYParity() error {
+	switch s.V.Int64() {
+	case 0, 1:
+		// do nothing
+	case 27, 28:
+		s.V = s.V.Sub(s.V, big.NewInt(27))
+	}
+	if s.V.Int64() != 0 && s.V.Int64() != 1 {
+		return fmt.Errorf("cannot recover Y-parity value from V = %d (V must be 0/1 or 27/28)", s.V.Int64())
+	}
+	return nil
+}
+
+// UpdateOriginal uses the original 27/28 V value (pre-EIP-155)
+func (s *SignatureData) UpdateOriginal() error {
+	vi64 := s.V.Int64()
+	if vi64 == 0 || vi64 == 1 {
+		s.V = s.V.Add(s.V, big.NewInt(27))
+	} else if vi64 != 27 && vi64 != 28 {
+		return fmt.Errorf("invalid V value in signature V = %d (V must be 0/1 or 27/28)", vi64)
+	}
+	return nil
+}
+
+// EIP-155 rules - 2xChainID + 35 + y-parity
+func (s *SignatureData) UpdateEIP155(chainID int64) error {
 	chainIDx2 := big.NewInt(chainID)
 	chainIDx2 = chainIDx2.Mul(chainIDx2, big.NewInt(2))
-	s.V = s.V.Add(s.V, chainIDx2).Add(s.V, big.NewInt(35-27))
-
+	err := s.normalizeVToYParity()
+	if err != nil {
+		return err
+	}
+	s.V = s.V.Add(s.V, chainIDx2).Add(s.V, big.NewInt(35))
+	return nil
 }
 
 // EIP-2930 (/ EIP-1559) rules - 0 or 1 V value for raw Y-parity value (chainID goes into the payload)
-func (s *SignatureData) UpdateEIP2930() {
-	vi64 := s.V.Int64()
-	if vi64 == 27 || vi64 == 28 {
-		s.V = s.V.Sub(s.V, big.NewInt(27))
-	}
+func (s *SignatureData) UpdateEIP2930() error {
+	return s.normalizeVToYParity()
 }
 
 // Recover obtains the original signer from the hash of the message
