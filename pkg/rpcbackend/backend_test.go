@@ -271,6 +271,16 @@ func TestSafeMessageGetter(t *testing.T) {
 	assert.Empty(t, (&RPCResponse{}).Message())
 }
 
+func TestRPCErrorResponse(t *testing.T) {
+
+	id := fftypes.JSONAnyPtr(`"test-id"`)
+	res := RPCErrorResponse(fmt.Errorf("something went wrong"), id, RPCCodeInternalError)
+	assert.Equal(t, "2.0", res.JSONRpc)
+	assert.Equal(t, id, res.ID)
+	assert.Equal(t, int64(RPCCodeInternalError), res.Error.Code)
+	assert.Equal(t, "something went wrong", res.Error.Message)
+}
+
 type testBatchRPCHandler func(rpcReqs []*RPCRequest) (int, []*RPCResponse)
 
 func newBatchTestServer(t *testing.T, rpcHandler testBatchRPCHandler) (context.Context, *RPCClient, func()) {
@@ -431,10 +441,27 @@ func TestBatchRPCCallNoResponse(t *testing.T) {
 	assert.Regexp(t, "FF22093", errs[0])
 }
 
+func TestBatchRPCCallNullResult(t *testing.T) {
+
+	// Server returns null result — matchBatchResponse assigns nil to the intermediate,
+	// CallRPCBatch converts nil → fftypes.NullString before the final json.Unmarshal.
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 200, []*RPCResponse{
+			{JSONRpc: "2.0", ID: rpcReqs[0].ID, Result: nil},
+		}
+	})
+	defer done()
+
+	var result *ethtypes.HexInteger
+	errs := rb.CallRPCBatch(ctx, &RPCBatchOp{Result: &result, Method: "eth_getTransactionReceipt"})
+	assert.Nil(t, errs[0])
+	assert.Nil(t, result)
+}
+
 func TestMatchBatchResponseNilResponse(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
-	matchBatchResponse(context.Background(), nil, map[string]int{}, nil, errs, matched)
+	matchBatchResponse[any](nil, map[string]int{}, nil, errs, matched)
 	assert.Nil(t, errs[0])
 	assert.False(t, matched[0])
 }
@@ -442,7 +469,7 @@ func TestMatchBatchResponseNilResponse(t *testing.T) {
 func TestMatchBatchResponseNilID(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
-	matchBatchResponse(context.Background(), &RPCResponse{}, map[string]int{}, nil, errs, matched)
+	matchBatchResponse(&RPCResponse{}, map[string]int{}, nil, errs, matched)
 	assert.Nil(t, errs[0])
 	assert.False(t, matched[0])
 }
@@ -451,7 +478,7 @@ func TestMatchBatchResponseNonStringID(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
 	rpcRes := &RPCResponse{ID: fftypes.JSONAnyPtr("123")} // JSON number — unmarshal into string fails
-	matchBatchResponse(context.Background(), rpcRes, map[string]int{"123": 0}, nil, errs, matched)
+	matchBatchResponse(rpcRes, map[string]int{"123": 0}, nil, errs, matched)
 	assert.Nil(t, errs[0])
 	assert.False(t, matched[0])
 }
@@ -460,20 +487,79 @@ func TestMatchBatchResponseUnknownID(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
 	rpcRes := &RPCResponse{ID: fftypes.JSONAnyPtr(`"unknown"`)}
-	matchBatchResponse(context.Background(), rpcRes, map[string]int{"other": 0}, nil, errs, matched)
+	matchBatchResponse(rpcRes, map[string]int{"other": 0}, nil, errs, matched)
 	assert.Nil(t, errs[0])
 	assert.False(t, matched[0])
+}
+
+func TestCallRPCTypedOK(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) {
+		return 200, &RPCResponse{
+			JSONRpc: "2.0",
+			ID:      rpcReq.ID,
+			Result:  fftypes.JSONAnyPtr(`"0x26"`),
+		}
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "eth_getTransactionCount", ethtypes.MustNewAddress("0xfb075bb99f2aa4c49955bf703509a227d7a12248"), "pending")
+	assert.Nil(t, rpcErr)
+	assert.Equal(t, int64(0x26), txCount.BigInt().Int64())
+}
+
+func TestCallRPCTypedRPCError(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) {
+		return 200, &RPCResponse{
+			JSONRpc: "2.0",
+			ID:      rpcReq.ID,
+			Error:   &RPCError{Code: -32000, Message: "not found"},
+		}
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "eth_getTransactionByHash", "0x1234")
+	assert.Regexp(t, "not found", rpcErr.Error())
+	assert.Equal(t, int64(-32000), rpcErr.Code)
+}
+
+func TestCallRPCTypedBadInput(t *testing.T) {
+
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) { return 500, nil })
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "test-bad-params", map[bool]bool{false: true})
+	assert.Regexp(t, "FF22011", rpcErr.Error())
+}
+
+func TestCallRPCTypedHTTPErrorNoRPCBody(t *testing.T) {
+
+	// 500 with no RPCResponse body — syncRequestTyped returns err but typed.Error is nil,
+	// so CallRPCTyped must fall through to the generic error path.
+	ctx, rb, done := newTestServer(t, func(rpcReq *RPCRequest) (status int, rpcRes *RPCResponse) {
+		return 500, nil
+	})
+	defer done()
+
+	var txCount ethtypes.HexInteger
+	rpcErr := CallRPCTyped(ctx, rb, &txCount, "eth_blockNumber")
+	assert.Regexp(t, "FF22012", rpcErr.Error())
 }
 
 func TestMatchBatchResponseRPCError(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
-	ops := []*RPCBatchOp{{Result: new(ethtypes.HexInteger), Method: "eth_test"}}
-	rpcRes := &RPCResponse{
+	result := new(ethtypes.HexInteger)
+	ops := []*RPCBatchOpTyped[ethtypes.HexInteger]{{Result: result, Method: "eth_test"}}
+	rpcRes := &RPCResponseTyped[ethtypes.HexInteger]{
 		ID:    fftypes.JSONAnyPtr(`"000000001"`),
 		Error: &RPCError{Code: -32000, Message: "oops"},
 	}
-	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
+	matchBatchResponse[ethtypes.HexInteger](rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
 	assert.True(t, matched[0])
 	assert.Regexp(t, "oops", errs[0])
 }
@@ -482,27 +568,26 @@ func TestMatchBatchResponseNullResult(t *testing.T) {
 	errs := make([]*RPCError, 1)
 	matched := make([]bool, 1)
 	var rawResult *fftypes.JSONAny
-	ops := []*RPCBatchOp{{Result: &rawResult, Method: "eth_test"}}
+	ops := []*RPCBatchOpTyped[*fftypes.JSONAny]{{Result: &rawResult, Method: "eth_test"}}
 	rpcRes := &RPCResponse{
 		ID:     fftypes.JSONAnyPtr(`"000000001"`),
 		Result: nil,
 	}
-	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
+	matchBatchResponse(rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
 	assert.True(t, matched[0])
 	assert.Nil(t, errs[0])
 }
 
-func TestMatchBatchResponseUnmarshalFail(t *testing.T) {
-	errs := make([]*RPCError, 1)
-	matched := make([]bool, 1)
+func TestBatchRPCCallUnmarshalFail(t *testing.T) {
+	ctx, rb, done := newBatchTestServer(t, func(rpcReqs []*RPCRequest) (int, []*RPCResponse) {
+		return 200, []*RPCResponse{
+			{JSONRpc: "2.0", ID: rpcReqs[0].ID, Result: fftypes.JSONAnyPtr(`"not-an-object"`)},
+		}
+	})
+	defer done()
+
 	var mapResult map[string]interface{}
-	ops := []*RPCBatchOp{{Result: &mapResult, Method: "eth_test"}}
-	rpcRes := &RPCResponse{
-		ID:     fftypes.JSONAnyPtr(`"000000001"`),
-		Result: fftypes.JSONAnyPtr(`"not-an-object"`),
-	}
-	matchBatchResponse(context.Background(), rpcRes, map[string]int{"000000001": 0}, ops, errs, matched)
-	assert.True(t, matched[0])
+	errs := rb.CallRPCBatch(ctx, &RPCBatchOp{Result: &mapResult, Method: "eth_test"})
 	assert.Regexp(t, "FF22065", errs[0])
 }
 

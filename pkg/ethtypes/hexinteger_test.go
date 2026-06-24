@@ -62,6 +62,38 @@ func TestHexIntegerOk(t *testing.T) {
 
 }
 
+func TestHexIntegerFastpath(t *testing.T) {
+	// Zero — no-allocation path
+	var h0 HexInteger
+	assert.NoError(t, h0.UnmarshalJSON([]byte(`"0x0"`)))
+	assert.Equal(t, int64(0), h0.BigInt().Int64())
+	assert.Equal(t, "0x0", h0.String())
+
+	// Decimal digits 1–9
+	for c := byte('1'); c <= '9'; c++ {
+		var h HexInteger
+		assert.NoError(t, h.UnmarshalJSON([]byte{'"', '0', 'x', c, '"'}))
+		assert.Equal(t, int64(c-'0'), h.BigInt().Int64())
+	}
+
+	// Hex digits a–f
+	for i, c := range []byte("abcdef") {
+		var h HexInteger
+		assert.NoError(t, h.UnmarshalJSON([]byte{'"', '0', 'x', c, '"'}))
+		assert.Equal(t, int64(10+i), h.BigInt().Int64())
+	}
+
+	// Uppercase falls through to slow path but still succeeds
+	var hUpper HexInteger
+	assert.NoError(t, hUpper.UnmarshalJSON([]byte(`"0xA"`)))
+	assert.Equal(t, int64(10), hUpper.BigInt().Int64())
+
+	// Multi-digit bypasses fastpath and succeeds normally
+	var hMulti HexInteger
+	assert.NoError(t, hMulti.UnmarshalJSON([]byte(`"0xff"`)))
+	assert.Equal(t, int64(255), hMulti.BigInt().Int64())
+}
+
 func TestHexIntegerMissingBytes(t *testing.T) {
 
 	testStruct := struct {

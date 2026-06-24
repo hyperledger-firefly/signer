@@ -36,6 +36,23 @@ func (h HexInteger) MarshalJSON() ([]byte, error) {
 }
 
 func (h *HexInteger) UnmarshalJSON(b []byte) error {
+	// Fastpath for quoted single-digit hex values "0x0"–"0xf": skip the
+	// json.Decoder, bytes.Reader, and json.Number allocations inside UnmarshalBigInt.
+	// Covers the dominant case where trace value fields are zero (non-value calls).
+	if len(b) == 5 && b[0] == '"' && b[1] == '0' && b[2] == 'x' && b[4] == '"' {
+		c := b[3]
+		switch {
+		case c == '0':
+			*h = HexInteger{} // zero big.Int has nil abs — no allocation
+			return nil
+		case c >= '1' && c <= '9':
+			*h = HexInteger(*big.NewInt(int64(c - '0')))
+			return nil
+		case c >= 'a' && c <= 'f':
+			*h = HexInteger(*big.NewInt(int64(c-'a') + 10))
+			return nil
+		}
+	}
 	bi, err := UnmarshalBigInt(context.Background(), b)
 	if err != nil {
 		return err
