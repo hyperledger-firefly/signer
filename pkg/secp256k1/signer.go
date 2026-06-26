@@ -22,9 +22,9 @@ import (
 	"math/big"
 
 	ecdsa "github.com/btcsuite/btcd/btcec/v2/ecdsa"
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 	"golang.org/x/crypto/sha3"
 )
 

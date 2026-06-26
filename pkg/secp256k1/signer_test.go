@@ -23,7 +23,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 	"github.com/stretchr/testify/assert"
 )
 

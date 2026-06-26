@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hyperledger/firefly-signer/pkg/secp256k1"
+	"github.com/hyperledger-firefly/signer/pkg/secp256k1"
 	"golang.org/x/crypto/sha3"
 )
 

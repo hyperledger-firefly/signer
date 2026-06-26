@@ -41,6 +41,19 @@ nav_order: 2
 |password|Password|`string`|`<nil>`
 |username|Username|`string`|`<nil>`
 
+## backend.dns
+
+|Key|Description|Type|Default Value|
+|---|-----------|----|-------------|
+|servers|An optional list of DNS server addresses (host or host:port, port defaults to 53) to use instead of the system resolver. Setting this forces use of Go's built-in DNS resolver.|`[]string`|`<nil>`
+|timeout|The dial timeout when contacting a configured DNS server|[`time.Duration`](https://pkg.go.dev/time#Duration)|`<nil>`
+
+## backend.net
+
+|Key|Description|Type|Default Value|
+|---|-----------|----|-------------|
+|cidrDenylist|A list of CIDR ranges to which outbound connections are blocked, as a core SSRF mitigation. Empty by default.|`[]string`|`<nil>`
+
 ## backend.proxy
 
 |Key|Description|Type|Default Value|

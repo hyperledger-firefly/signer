@@ -21,9 +21,9 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/abi"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/abi"
 )
 
 var internalTypeStructExtractor = regexp.MustCompile(`^struct (.*\.)?([^.\[\]]+)(\[\d*\])*$`)

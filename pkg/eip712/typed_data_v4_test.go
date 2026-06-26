@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/hyperledger/firefly-common/pkg/ffapi"
+	"github.com/hyperledger-firefly/common/pkg/ffapi"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )

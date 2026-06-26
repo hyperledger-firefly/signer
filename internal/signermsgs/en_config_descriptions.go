@@ -17,7 +17,7 @@
 package signermsgs
 
 import (
-	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
 	"golang.org/x/text/language"
 )
 

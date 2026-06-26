@@ -18,7 +18,7 @@ package secp256k1
 
 import (
 	btcec "github.com/btcsuite/btcd/btcec/v2" // ISC licensed
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 	"golang.org/x/crypto/sha3"
 )
 

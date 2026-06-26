@@ -28,11 +28,11 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/hyperledger/firefly-common/pkg/fftypes"
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-common/pkg/log"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/keystorev3"
+	"github.com/hyperledger-firefly/common/pkg/fftypes"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/common/pkg/log"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/keystorev3"
 	"github.com/karlseguin/ccache"
 	"github.com/pelletier/go-toml"
 	"gopkg.in/yaml.v2"
@@ -115,7 +115,7 @@ type fsWallet struct {
 
 func (w *fsWallet) Initialize(ctx context.Context) error {
 	// Run a get accounts pass, to check all is ok
-	lCtx, lCancel := context.WithCancel(log.WithLogField(ctx, "fswallet", w.conf.Path))
+	lCtx, lCancel := context.WithCancel(log.WithLogFields(ctx, "fswallet", w.conf.Path))
 	w.fsListenerCancel = lCancel
 	w.fsListenerStarted = make(chan error)
 	w.fsListenerDone = make(chan struct{})
