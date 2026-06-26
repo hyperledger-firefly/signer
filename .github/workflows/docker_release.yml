@@ -18,20 +18,20 @@ jobs:
             --label commit=$GITHUB_SHA \
             --label build_date=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
             --label tag=${GITHUB_REF##*/} \
-            --tag ghcr.io/hyperledger/firefly-signer:${GITHUB_REF##*/}" \
+            --tag ghcr.io/hyperledger-firefly/signer:${GITHUB_REF##*/}" \
             docker
 
       - name: Tag release
         if: github.event.action == 'released'
-        run: docker tag ghcr.io/hyperledger/firefly-signer:${GITHUB_REF##*/} ghcr.io/hyperledger/firefly-signer:latest
+        run: docker tag ghcr.io/hyperledger-firefly/signer:${GITHUB_REF##*/} ghcr.io/hyperledger-firefly/signer:latest
 
       - name: Push docker image
         run: |
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
-          docker push ghcr.io/hyperledger/firefly-signer:${GITHUB_REF##*/}
+          docker push ghcr.io/hyperledger-firefly/signer:${GITHUB_REF##*/}
 
       - name: Push latest tag
         if: github.event.action == 'released'
         run: |
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u $GITHUB_ACTOR --password-stdin
-          docker push ghcr.io/hyperledger/firefly-signer:latest
+          docker push ghcr.io/hyperledger-firefly/signer:latest
