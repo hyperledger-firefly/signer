@@ -20,7 +20,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger-firefly/common/pkg/log"
 )
 
 // defaultErrorEntries are the built-in Solidity error types that are always

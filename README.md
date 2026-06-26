@@ -1,5 +1,5 @@
-[![codecov](https://codecov.io/gh/hyperledger/firefly-signer/branch/main/graph/badge.svg?token=OEI8A08P0R)](https://codecov.io/gh/hyperledger/firefly-signer)
-[![Go Reference](https://pkg.go.dev/badge/github.com/hyperledger/firefly-signer.svg)](https://pkg.go.dev/github.com/hyperledger/firefly-signer)
+[![codecov](https://codecov.io/gh/hyperledger-firefly/signer/branch/main/graph/badge.svg?token=OEI8A08P0R)](https://codecov.io/gh/hyperledger-firefly/signer)
+[![Go Reference](https://pkg.go.dev/badge/github.com/hyperledger-firefly/signer.svg)](https://pkg.go.dev/github.com/hyperledger-firefly/signer)
 
 # Hyperledger FireFly Signer
 
@@ -8,35 +8,35 @@ A set of Ethereum transaction signing utilities designed for use across projects
 ## Go API libraries
 
 - RLP Encoding and Decoding
-  - See `pkg/rlp` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/rlp)
+  - See `pkg/rlp` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/rlp)
 - ABI Encoding and Decoding
   - Validation of ABI definitions
   - JSON <-> Value Tree <-> ABI Bytes
   - Model API exposed, as well as encode/decode APIs
-  - See `pkg/abi` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/abi)
+  - See `pkg/abi` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/abi)
 - Secp256k1 transaction signing for Ethereum transactions
   - Original
   - EIP-155
   - EIP-1559
   - EIP-712 (see below)
-  - See `pkg/ethsigner` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/ethsigner)
+  - See `pkg/ethsigner` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/ethsigner)
 - EIP-712 Typed Data implementation
-  - See `pkg/eip712` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/eip712)
+  - See `pkg/eip712` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/eip712)
 - Keystore V3 key file implementation
   - Scrypt - read/write
   - pbkdf2 - read
-  - See `pkg/keystorev3` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/keystorev3)
+  - See `pkg/keystorev3` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/keystorev3)
 - Filesystem wallet
   - Configurable caching for in-memory keys
   - Files in directory with a given extension matching `{{ADDRESS}}.key`/`{{ADDRESS}}.toml` or arbitrary regex
   - Files can be TOML/YAML/JSON metadata pointing to Keystore V3 files + password files
   - Files can be Keystore V3 files directly, with accompanying `{{ADDRESS}}.pass` files
   - Detects newly added files automatically
-  - See `pkg/fswallet` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/fswallet)
+  - See `pkg/fswallet` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/fswallet)
 - JSON/RPC client
   - HTTP
   - WebSockets - with `eth_subscribe` support
-  - See `pkg/rpcbackend` [go doc](https://pkg.go.dev/github.com/hyperledger/firefly-signer/pkg/rpcbackend)
+  - See `pkg/rpcbackend` [go doc](https://pkg.go.dev/github.com/hyperledger-firefly/signer/pkg/rpcbackend)
 
 ## JSON/RPC proxy server
 

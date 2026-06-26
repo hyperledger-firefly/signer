@@ -5,8 +5,8 @@ package ethsignermocks
 import (
 	context "context"
 
-	ethsigner "github.com/hyperledger/firefly-signer/pkg/ethsigner"
-	ethtypes "github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	ethsigner "github.com/hyperledger-firefly/signer/pkg/ethsigner"
+	ethtypes "github.com/hyperledger-firefly/signer/pkg/ethtypes"
 
 	mock "github.com/stretchr/testify/mock"
 )

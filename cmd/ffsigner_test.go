@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/firefly-signer/mocks/rpcservermocks"
+	"github.com/hyperledger-firefly/signer/mocks/rpcservermocks"
 	"github.com/stretchr/testify/assert"
 )
 

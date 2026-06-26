@@ -19,8 +19,8 @@ package fswallet
 import (
 	"context"
 
-	"github.com/hyperledger/firefly-common/pkg/config"
-	"github.com/hyperledger/firefly-signer/pkg/keystorev3"
+	"github.com/hyperledger-firefly/common/pkg/config"
+	"github.com/hyperledger-firefly/signer/pkg/keystorev3"
 )
 
 const (

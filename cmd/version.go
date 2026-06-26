@@ -22,8 +22,8 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v2"
 )
