@@ -19,10 +19,11 @@ package secp256k1
 import (
 	"bytes"
 	"encoding/hex"
+	"math/big"
 	"strconv"
 	"testing"
 
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -74,8 +75,39 @@ func TestSignMessage(t *testing.T) {
 	assert.Equal(t, "0464eee9e2fe1a10ffe48c78b80de1ed8dcf996f3f60955cb2e03cb21903d930", ((ethtypes.HexBytesPlain)(sig.R.Bytes())).String())
 	assert.Equal(t, "06624da478b3f862582e85b31c6a21c6cae2eee2bd50f55c93c4faad9d9c8d7f", ((ethtypes.HexBytesPlain)(sig.S.Bytes())).String())
 
-	sig.UpdateEIP155(1001)
+	err = sig.UpdateEIP155(1001)
+	assert.NoError(t, err)
 	assert.Equal(t, int64(2038), sig.V.Int64())
+}
+
+func TestUpdateEIP155Error(t *testing.T) {
+	sig := &SignatureData{
+		V: big.NewInt(42),
+		R: new(big.Int),
+		S: new(big.Int),
+	}
+	err := sig.UpdateEIP155(1001)
+	assert.Regexp(t, "cannot recover Y-parity value", err)
+}
+
+func TestUpdateEIP2930Error(t *testing.T) {
+	sig := &SignatureData{
+		V: big.NewInt(42),
+		R: new(big.Int),
+		S: new(big.Int),
+	}
+	err := sig.UpdateEIP2930()
+	assert.Regexp(t, "cannot recover Y-parity value", err)
+}
+
+func TestUpdateOriginalError(t *testing.T) {
+	sig := &SignatureData{
+		V: big.NewInt(42),
+		R: new(big.Int),
+		S: new(big.Int),
+	}
+	err := sig.UpdateOriginal()
+	assert.Regexp(t, "invalid V value in signature", err)
 }
 
 func TestSignFailNil(t *testing.T) {

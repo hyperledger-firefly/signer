@@ -19,8 +19,8 @@ package ethsigner
 import (
 	"context"
 
-	"github.com/hyperledger/firefly-signer/pkg/eip712"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/eip712"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 )
 
 // Wallet is the common interface can be implemented across wallet/signing capabilities

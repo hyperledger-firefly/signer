@@ -23,11 +23,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hyperledger/firefly-common/pkg/fftypes"
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-common/pkg/log"
-	"github.com/hyperledger/firefly-common/pkg/wsclient"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/common/pkg/fftypes"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/common/pkg/log"
+	"github.com/hyperledger-firefly/common/pkg/wsclient"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 	"github.com/sirupsen/logrus"
 )
 
@@ -96,7 +96,7 @@ func (rc *wsRPCClient) Connect(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	go rc.receiveLoop(log.WithLogField(ctx, "role", "rpc_websocket"))
+	go rc.receiveLoop(log.WithLogFields(ctx, "role", "rpc_websocket"))
 
 	// Wait until the afterConnect hook has been driven
 	connected := make(chan struct{})

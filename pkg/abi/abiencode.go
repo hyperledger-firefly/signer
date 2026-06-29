@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 )
 
 func (cv *ComponentValue) EncodeABIData() ([]byte, error) {

@@ -19,9 +19,9 @@ package ethsigner
 import (
 	"context"
 
-	"github.com/hyperledger/firefly-signer/pkg/eip712"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
-	"github.com/hyperledger/firefly-signer/pkg/secp256k1"
+	"github.com/hyperledger-firefly/signer/pkg/eip712"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/secp256k1"
 )
 
 type EIP712Result struct {
@@ -39,6 +39,11 @@ func SignTypedDataV4(ctx context.Context, signer secp256k1.SignerDirect, payload
 	}
 	// Note that signer.Sign performs the hash
 	sig, err := signer.SignDirect(encodedData)
+	if err != nil {
+		return nil, err
+	}
+
+	err = sig.UpdateOriginal()
 	if err != nil {
 		return nil, err
 	}

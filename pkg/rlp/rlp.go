@@ -21,7 +21,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 )
 
 // Data is an individual RLP Data element - or an "RLP string"

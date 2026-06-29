@@ -1,13 +1,15 @@
-module github.com/hyperledger/firefly-signer
+module github.com/hyperledger-firefly/signer
 
-go 1.23.0
+go 1.26.0
+
+toolchain go1.26.4
 
 require (
 	github.com/btcsuite/btcd/btcec/v2 v2.3.5
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-resty/resty/v2 v2.11.0
 	github.com/gorilla/mux v1.8.1
-	github.com/hyperledger/firefly-common v1.5.5
+	github.com/hyperledger-firefly/common v1.6.2
 	github.com/karlseguin/ccache v2.0.3+incompatible
 	github.com/pelletier/go-toml v1.9.5
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1

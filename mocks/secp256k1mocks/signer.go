@@ -3,7 +3,7 @@
 package secp256k1mocks
 
 import (
-	secp256k1 "github.com/hyperledger/firefly-signer/pkg/secp256k1"
+	secp256k1 "github.com/hyperledger-firefly/signer/pkg/secp256k1"
 	mock "github.com/stretchr/testify/mock"
 )
 

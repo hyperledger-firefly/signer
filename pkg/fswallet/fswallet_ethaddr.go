@@ -20,13 +20,13 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/eip712"
-	"github.com/hyperledger/firefly-signer/pkg/ethsigner"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
-	"github.com/hyperledger/firefly-signer/pkg/keystorev3"
-	"github.com/hyperledger/firefly-signer/pkg/secp256k1"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/eip712"
+	"github.com/hyperledger-firefly/signer/pkg/ethsigner"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/keystorev3"
+	"github.com/hyperledger-firefly/signer/pkg/secp256k1"
 )
 
 type SyncAddressCallback func(context.Context, ethtypes.Address0xHex) error

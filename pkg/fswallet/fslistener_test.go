@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/hyperledger/firefly-common/pkg/config"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/common/pkg/config"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 )

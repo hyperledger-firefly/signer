@@ -23,8 +23,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 )
 
 // The format of the "internalType" in the Solidity compiler is of the form "struct MySmartContract.MyStruct[]`

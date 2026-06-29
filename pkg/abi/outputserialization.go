@@ -25,9 +25,9 @@ import (
 	"math/big"
 	"strconv"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
 )
 
 // Serializer contains a set of options for how to serialize an parsed

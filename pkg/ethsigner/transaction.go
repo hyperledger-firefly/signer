@@ -22,12 +22,12 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-common/pkg/log"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
-	"github.com/hyperledger/firefly-signer/pkg/ethtypes"
-	"github.com/hyperledger/firefly-signer/pkg/rlp"
-	"github.com/hyperledger/firefly-signer/pkg/secp256k1"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/common/pkg/log"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/signer/pkg/ethtypes"
+	"github.com/hyperledger-firefly/signer/pkg/rlp"
+	"github.com/hyperledger-firefly/signer/pkg/secp256k1"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -154,6 +154,11 @@ func (t *Transaction) SignLegacyOriginal(signer secp256k1.Signer) ([]byte, error
 }
 
 func (t *Transaction) FinalizeLegacyOriginalWithSignature(signaturePayload *TransactionSignaturePayload, sig *secp256k1.SignatureData) ([]byte, error) {
+	// Use the pre-EIP-155 V value (27/28)
+	err := sig.UpdateOriginal()
+	if err != nil {
+		return nil, err
+	}
 	rlpList := t.addSignature(signaturePayload.rlpList, sig)
 	return rlpList.Encode(), nil
 }
@@ -187,8 +192,10 @@ func (t *Transaction) SignLegacyEIP155(signer secp256k1.Signer, chainID int64) (
 
 func (t *Transaction) FinalizeLegacyEIP155WithSignature(signaturePayload *TransactionSignaturePayload, sig *secp256k1.SignatureData, chainID int64) ([]byte, error) {
 	// Use the EIP-155 V value, of (2*ChainID + 35 + Y-parity)
-	sig.UpdateEIP155(chainID)
-
+	err := sig.UpdateEIP155(chainID)
+	if err != nil {
+		return nil, err
+	}
 	rlpList := t.addSignature(signaturePayload.rlpList[0:6] /* we don't include the chainID+0+0 hash values in the payload */, sig)
 	return rlpList.Encode(), nil
 }
@@ -222,7 +229,10 @@ func (t *Transaction) SignEIP1559(signer secp256k1.Signer, chainID int64) ([]byt
 
 func (t *Transaction) FinalizeEIP1559WithSignature(signaturePayload *TransactionSignaturePayload, sig *secp256k1.SignatureData) ([]byte, error) {
 	// Use the direct 0/1 Y-parity value
-	sig.UpdateEIP2930()
+	err := sig.UpdateEIP2930()
+	if err != nil {
+		return nil, err
+	}
 
 	// Now we need a new RLP array, _including_ signature
 	// 0x02 || rlp([chain_id, nonce, max_priority_fee_per_gas, max_fee_per_gas, gas_limit, destination, amount, data, access_list, signature_y_parity, signature_r, signature_s])
@@ -256,13 +266,12 @@ func RecoverLegacyRawTransaction(ctx context.Context, rawTx ethtypes.HexBytes0xP
 	vValue := rlpList[6].ToData().Int().Int64()
 	rValue := rlpList[7].ToData().BytesNotNil()
 	sValue := rlpList[8].ToData().BytesNotNil()
-
 	var message []byte
 	if vValue != 27 && vValue != 28 {
 		// Legacy with EIP155 extensions
-		vValue = vValue - (chainID * 2) - 8
-		if vValue != 27 && vValue != 28 {
-			return nil, nil, i18n.NewError(ctx, signermsgs.MsgInvalidEIP155TransactionV, chainID)
+		yParity := vValue - (chainID * 2) - 35
+		if yParity != 0 && yParity != 1 {
+			return nil, nil, i18n.NewError(ctx, signermsgs.MsgInvalidEIP155TransactionV, chainID, vValue)
 		}
 
 		signedRLPList := make(rlp.List, 6, 9)

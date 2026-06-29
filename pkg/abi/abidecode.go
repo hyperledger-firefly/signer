@@ -21,8 +21,8 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/hyperledger/firefly-common/pkg/i18n"
-	"github.com/hyperledger/firefly-signer/internal/signermsgs"
+	"github.com/hyperledger-firefly/common/pkg/i18n"
+	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 )
 
 // walkTupleABIBytes is the main entry point to the logic, decoding a list of parameters at a position
