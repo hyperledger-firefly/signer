@@ -1,4 +1,4 @@
-// Copyright © 2024 Kaleido, Inc.
+// Copyright © 2026 Kaleido, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -162,13 +162,20 @@ func (rc *RPCClient) allocateRequestID(req *RPCRequest) string {
 }
 
 func (rc *RPCClient) CallRPC(ctx context.Context, result interface{}, method string, params ...interface{}) *RPCError {
+	start := time.Now()
 	rpcReq, rpcErr := buildRequest(ctx, method, params)
 	if rpcErr != nil {
+		recordRPCRequest(ctx, method, statusInvalidRequest, false, time.Since(start))
 		return rpcErr
 	}
-	res, err := rc.SyncRequest(ctx, rpcReq)
+	res, httpStatus, err := syncRequestTyped[*fftypes.JSONAny](ctx, rc, rpcReq, false)
 	if err != nil {
-		if res != nil && res.Error != nil && res.Error.Code != 0 {
+		status := statusTransportError
+		if httpStatus > 0 {
+			status = statusFromHTTPCode(httpStatus)
+		}
+		recordRPCRequest(ctx, method, status, false, time.Since(start))
+		if res.Error != nil && res.Error.Code != 0 {
 			return res.Error
 		}
 		return &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
@@ -176,8 +183,10 @@ func (rc *RPCClient) CallRPC(ctx context.Context, result interface{}, method str
 	err = json.Unmarshal(res.Result.Bytes(), &result)
 	if err != nil {
 		err = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, result, err)
+		recordRPCRequest(ctx, method, statusParseError, false, time.Since(start))
 		return &RPCError{Code: int64(RPCCodeParseError), Message: err.Error()}
 	}
+	recordRPCRequest(ctx, method, statusFromHTTPCode(httpStatus), false, time.Since(start))
 	return nil
 }
 
@@ -240,6 +249,8 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 // All ops in the batch must share the same result type.
 func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBatchOpTyped[T]) []*RPCError {
 	errs := make([]*RPCError, len(ops))
+	start := time.Now()
+	recordRPCBatchSize(ctx, len(ops))
 
 	batchReqs := make([]*RPCRequest, len(ops))
 	idToIndex := make(map[string]int, len(ops))
@@ -247,6 +258,7 @@ func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBat
 		rpcReq, rpcErr := buildRequest(ctx, op.Method, op.Params)
 		if rpcErr != nil {
 			errs[i] = rpcErr
+			recordRPCRequest(ctx, op.Method, statusInvalidRequest, true, time.Since(start))
 			return errs
 		}
 		rpcReq.JSONRpc = "2.0"
@@ -258,13 +270,16 @@ func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBat
 
 	returnSlot, rpcErr := rc.reserveConcurrencySlot(ctx, "batch")
 	if rpcErr != nil {
+		batchDuration := time.Since(start)
+		for _, op := range ops {
+			recordRPCRequest(ctx, op.Method, statusCanceled, true, batchDuration)
+		}
 		return fill(errs, rpcErr)
 	}
 	defer returnSlot()
 
 	var batchRes []*RPCResponseTyped[T]
 	log.L(ctx).Debugf("RPC batch[%d] -->", len(ops))
-	rpcStartTime := time.Now()
 	res, err := rc.client.R().
 		SetContext(ctx).
 		SetBody(batchReqs).
@@ -273,11 +288,18 @@ func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBat
 	if err != nil {
 		errMsg := i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, err).Error()
 		log.L(ctx).Errorf("RPC batch[%d] <-- ERROR: %s", len(ops), errMsg)
+		for _, op := range ops {
+			recordRPCRequest(ctx, op.Method, statusTransportError, true, time.Since(start))
+		}
 		return fill(errs, &RPCError{Code: int64(RPCCodeInternalError), Message: errMsg})
 	}
-	log.L(ctx).Infof("RPC batch[%d] <-- [%d] (%.2fms)", len(ops), res.StatusCode(), float64(time.Since(rpcStartTime))/float64(time.Millisecond))
+	log.L(ctx).Infof("RPC batch[%d] <-- [%d] (%s)", len(ops), res.StatusCode(), time.Since(start))
 	if res.IsError() {
 		errMsg := i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, res.Status()).Error()
+		httpStatus := statusFromHTTPCode(res.StatusCode())
+		for _, op := range ops {
+			recordRPCRequest(ctx, op.Method, httpStatus, true, time.Since(start))
+		}
 		return fill(errs, &RPCError{Code: int64(RPCCodeInternalError), Message: errMsg})
 	}
 
@@ -286,11 +308,22 @@ func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBat
 		matchBatchResponse(rpcRes, idToIndex, ops, errs, matched)
 	}
 
+	httpStatus := statusFromHTTPCode(res.StatusCode())
 	for i, op := range ops {
 		if !matched[i] && errs[i] == nil {
 			err := i18n.NewError(ctx, signermsgs.MsgBatchNoResponse, op.Method, i)
 			errs[i] = &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
 		}
+		status := httpStatus
+		if errs[i] != nil {
+			switch {
+			case errs[i].Code == int64(RPCCodeParseError):
+				status = statusParseError
+			case !matched[i]:
+				status = statusTransportError
+			}
+		}
+		recordRPCRequest(ctx, op.Method, status, true, time.Since(start))
 	}
 
 	return errs
@@ -299,12 +332,21 @@ func CallRPCBatchTyped[T any](ctx context.Context, rc *RPCClient, ops ...*RPCBat
 // syncRequestTyped is the canonical implementation of a single JSON-RPC round-trip.
 // It owns the concurrency slot, request ID allocation, logging, and HTTP call.
 // SyncRequest and CallRPCTyped are thin wrappers around it.
-func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequest) (rpcRes RPCResponseTyped[T], err error) {
+func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequest, emitMetrics bool) (rpcRes RPCResponseTyped[T], httpStatus int, err error) {
+	start := time.Now()
+	method := rpcReq.Method
+	record := func(status string) {
+		if emitMetrics {
+			recordRPCRequest(ctx, method, status, false, time.Since(start))
+		}
+	}
+
 	returnSlot, rpcErr := rc.reserveConcurrencySlot(ctx, rpcReq.ID)
 	if rpcErr != nil {
 		rpcRes.ID = rpcReq.ID
 		rpcRes.Error = rpcErr
-		return rpcRes, rpcErr.Error()
+		record(statusCanceled)
+		return rpcRes, 0, rpcErr.Error()
 	}
 	defer returnSlot()
 
@@ -337,7 +379,8 @@ func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequ
 		httpErr = i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, httpErr)
 		log.L(ctx).Errorf("RPC[%s] <-- ERROR: %s", rpcTraceID, httpErr)
 		rpcRes.Error = &RPCError{Code: int64(RPCCodeInternalError), Message: httpErr.Error()}
-		return rpcRes, httpErr
+		record(statusTransportError)
+		return rpcRes, 0, httpErr
 	}
 	if logrus.IsLevelEnabled(logrus.TraceLevel) {
 		jsonOutput, _ := json.Marshal(rpcRes)
@@ -354,10 +397,12 @@ func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequ
 			rpcMsg = i18n.NewError(ctx, signermsgs.MsgRPCRequestFailed, res.Status()).Error()
 		}
 		log.L(ctx).Errorf("RPC[%s] <-- [%d]: %s", rpcTraceID, res.StatusCode(), errLog)
-		return rpcRes, errors.New(rpcMsg)
+		record(statusFromHTTPCode(res.StatusCode()))
+		return rpcRes, res.StatusCode(), errors.New(rpcMsg)
 	}
 	log.L(ctx).Infof("RPC[%s] <-- %s [%d] OK (%.2fms)", rpcTraceID, rpcReq.Method, res.StatusCode(), float64(time.Since(rpcStartTime))/float64(time.Millisecond))
-	return rpcRes, nil
+	record(statusFromHTTPCode(res.StatusCode()))
+	return rpcRes, res.StatusCode(), nil
 }
 
 // SyncRequest sends an individual RPC request to the backend (always over HTTP currently),
@@ -366,7 +411,7 @@ func syncRequestTyped[T any](ctx context.Context, rc *RPCClient, rpcReq *RPCRequ
 // In all return paths *including error paths* the RPCResponse is populated
 // so the caller has an RPC structure to send back to the front-end caller.
 func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (*RPCResponse, error) {
-	rpcRes, err := syncRequestTyped[*fftypes.JSONAny](ctx, rc, rpcReq)
+	rpcRes, _, err := syncRequestTyped[*fftypes.JSONAny](ctx, rc, rpcReq, true)
 	if err != nil {
 		return &rpcRes, err
 	}
@@ -380,18 +425,26 @@ func (rc *RPCClient) SyncRequest(ctx context.Context, rpcReq *RPCRequest) (*RPCR
 // CallRPCTyped performs a single JSON-RPC call and decodes the result directly into T.
 // More efficient than parsing into generic JSON bytes result structure first.
 func CallRPCTyped[T any](ctx context.Context, rc *RPCClient, result *T, method string, params ...interface{}) *RPCError {
+	start := time.Now()
 	rpcReq, rpcErr := buildRequest(ctx, method, params)
 	if rpcErr != nil {
+		recordRPCRequest(ctx, method, statusInvalidRequest, false, time.Since(start))
 		return rpcErr
 	}
-	typed, err := syncRequestTyped[T](ctx, rc, rpcReq)
+	typed, httpStatus, err := syncRequestTyped[T](ctx, rc, rpcReq, false)
 	if err != nil {
+		status := statusTransportError
+		if httpStatus > 0 {
+			status = statusFromHTTPCode(httpStatus)
+		}
+		recordRPCRequest(ctx, method, status, false, time.Since(start))
 		if typed.Error != nil && typed.Error.Code != 0 {
 			return typed.Error
 		}
 		return &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
 	}
 	*result = typed.Result
+	recordRPCRequest(ctx, method, statusFromHTTPCode(httpStatus), false, time.Since(start))
 	return nil
 }
 

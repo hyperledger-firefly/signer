@@ -1,4 +1,4 @@
-// Copyright © 2024 Kaleido, Inc.
+// Copyright © 2026 Kaleido, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -360,35 +360,39 @@ func (rc *wsRPCClient) sendRPC(ctx context.Context, reqID string, rpcReq *RPCReq
 }
 
 func (rc *wsRPCClient) CallRPC(ctx context.Context, result interface{}, method string, params ...interface{}) *RPCError {
+	start := time.Now()
 	rpcReq, rpcErr := buildRequest(ctx, method, params)
 	if rpcErr != nil {
+		recordRPCRequest(ctx, method, statusInvalidRequest, false, time.Since(start))
 		return rpcErr
 	}
 
 	reqID, resChannel := rc.addInflightRequest(rpcReq)
 	defer rc.removeInflightRequest(reqID)
 
-	rpcStartTime := time.Now()
 	if rpcErr = rc.sendRPC(ctx, reqID, rpcReq); rpcErr != nil {
+		recordRPCRequest(ctx, method, statusTransportError, false, time.Since(start))
 		return rpcErr
 	}
-	return rc.waitResponse(ctx, result, reqID, rpcReq, rpcStartTime, resChannel)
+	return rc.waitResponse(ctx, result, reqID, rpcReq, start, resChannel)
 }
 
-func (rc *wsRPCClient) waitResponse(ctx context.Context, result interface{}, reqID string, rpcReq *RPCRequest, rpcStartTime time.Time, resChannel chan *RPCResponse) *RPCError {
+func (rc *wsRPCClient) waitResponse(ctx context.Context, result interface{}, reqID string, rpcReq *RPCRequest, start time.Time, resChannel chan *RPCResponse) *RPCError {
 	var rpcRes *RPCResponse
 	select {
 	case rpcRes = <-resChannel:
 	case <-ctx.Done():
 		rpcErr := NewRPCError(ctx, RPCCodeInternalError, signermsgs.MsgRequestCanceledContext, reqID)
 		log.L(ctx).Errorf("RPC[%s] <-- ERROR: %s", reqID, rpcErr.Error())
+		recordRPCRequest(ctx, rpcReq.Method, statusCanceled, false, time.Since(start))
 		return rpcErr
 	}
 	if rpcRes.Error != nil && rpcRes.Error.Code != 0 {
 		log.L(ctx).Errorf("RPC[%s] <-- ERROR: %s", reqID, rpcRes.Message())
+		recordRPCRequest(ctx, rpcReq.Method, statusFromRPCError(rpcRes.Error.Code), false, time.Since(start))
 		return rpcRes.Error
 	}
-	log.L(ctx).Infof("RPC[%s] <-- %s OK (%.2fms)", reqID, rpcReq.Method, float64(time.Since(rpcStartTime))/float64(time.Millisecond))
+	log.L(ctx).Infof("RPC[%s] <-- %s OK (%s)", reqID, rpcReq.Method, time.Since(start))
 	if rpcRes.Result == nil {
 		// We don't want a result for errors, but a null success response needs to go in there
 		rpcRes.Result = fftypes.JSONAnyPtr(fftypes.NullString)
@@ -396,9 +400,11 @@ func (rc *wsRPCClient) waitResponse(ctx context.Context, result interface{}, req
 	if result != nil {
 		if err := json.Unmarshal(rpcRes.Result.Bytes(), &result); err != nil {
 			err = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, result, err)
+			recordRPCRequest(ctx, rpcReq.Method, statusParseError, false, time.Since(start))
 			return &RPCError{Code: int64(RPCCodeParseError), Message: err.Error()}
 		}
 	}
+	recordRPCRequest(ctx, rpcReq.Method, statusOK, false, time.Since(start))
 	return nil
 }
 
