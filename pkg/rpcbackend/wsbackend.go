@@ -393,12 +393,8 @@ func (rc *wsRPCClient) waitResponse(ctx context.Context, result interface{}, req
 		return rpcRes.Error
 	}
 	log.L(ctx).Infof("RPC[%s] <-- %s OK (%s)", reqID, rpcReq.Method, time.Since(start))
-	if rpcRes.Result == nil {
-		// We don't want a result for errors, but a null success response needs to go in there
-		rpcRes.Result = fftypes.JSONAnyPtr(fftypes.NullString)
-	}
 	if result != nil {
-		if err := json.Unmarshal(rpcRes.Result.Bytes(), &result); err != nil {
+		if err := unmarshalRPCResult(rpcRes.Result, &result); err != nil {
 			err = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, result, err)
 			recordRPCRequest(ctx, rpcReq.Method, statusParseError, false, time.Since(start))
 			return &RPCError{Code: int64(RPCCodeParseError), Message: err.Error()}
