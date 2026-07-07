@@ -250,6 +250,27 @@ func TestCallRPC(t *testing.T) {
 	done()
 }
 
+func TestCallRPCNullResult(t *testing.T) {
+	ctx, rc, toServer, fromServer, done := newTestWSRPC(t)
+
+	err := rc.Connect(context.Background())
+	assert.NoError(t, err)
+
+	go func() {
+		msg := <-toServer
+		assert.JSONEq(t, `{"jsonrpc":"2.0","id":"000000001","method":"eth_getTransactionReceipt","params":["0x61ca9c99c1d752fb3bda568b8566edf33ba93585c64a970566e6dfb540a5cbc1"]}`, msg)
+		fromServer <- `{"jsonrpc":"2.0","id":"000000001","result":null}`
+	}()
+
+	// A success with "result": null must decode to a nil result rather than failing to parse
+	receipt := &map[string]interface{}{}
+	rpcErr := rc.CallRPC(ctx, &receipt, "eth_getTransactionReceipt", "0x61ca9c99c1d752fb3bda568b8566edf33ba93585c64a970566e6dfb540a5cbc1")
+	assert.Nil(t, rpcErr)
+	assert.Nil(t, receipt)
+
+	done()
+}
+
 func TestWaitResponseClosedContext(t *testing.T) {
 	ctx, rc, _, _, done := newTestWSRPC(t)
 

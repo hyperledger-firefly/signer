@@ -161,6 +161,17 @@ func (rc *RPCClient) allocateRequestID(req *RPCRequest) string {
 	return reqID
 }
 
+// unmarshalRPCResult decodes a JSON-RPC result payload into the caller's target,
+// treating an absent payload as JSON null. A success response with "result": null
+// decodes to a nil JSONAny
+func unmarshalRPCResult(data *fftypes.JSONAny, target interface{}) error {
+	b := data.Bytes()
+	if len(b) == 0 {
+		b = []byte(fftypes.NullString)
+	}
+	return json.Unmarshal(b, target)
+}
+
 func (rc *RPCClient) CallRPC(ctx context.Context, result interface{}, method string, params ...interface{}) *RPCError {
 	start := time.Now()
 	rpcReq, rpcErr := buildRequest(ctx, method, params)
@@ -180,7 +191,7 @@ func (rc *RPCClient) CallRPC(ctx context.Context, result interface{}, method str
 		}
 		return &RPCError{Code: int64(RPCCodeInternalError), Message: err.Error()}
 	}
-	err = json.Unmarshal(res.Result.Bytes(), &result)
+	err = unmarshalRPCResult(res.Result, &result)
 	if err != nil {
 		err = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, result, err)
 		recordRPCRequest(ctx, method, statusParseError, false, time.Since(start))
@@ -232,11 +243,7 @@ func (rc *RPCClient) CallRPCBatch(ctx context.Context, ops ...*RPCBatchOp) []*RP
 		if errs[i] != nil {
 			continue
 		}
-		result := intermediates[i]
-		if result == nil {
-			result = fftypes.JSONAnyPtr(fftypes.NullString)
-		}
-		if unmarshalErr := json.Unmarshal(result.Bytes(), op.Result); unmarshalErr != nil {
+		if unmarshalErr := unmarshalRPCResult(intermediates[i], op.Result); unmarshalErr != nil {
 			unmarshalErr = i18n.NewError(ctx, signermsgs.MsgResultParseFailed, op.Result, unmarshalErr)
 			errs[i] = &RPCError{Code: int64(RPCCodeParseError), Message: unmarshalErr.Error()}
 		}
