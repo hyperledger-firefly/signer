@@ -111,6 +111,24 @@ type RPCError struct {
 	Data    fftypes.JSONAny `json:"data,omitempty"`
 }
 
+// UnmarshalJSON accepts the standard JSON-RPC 2.0 error object ({"code", "message", ...}),
+// but falls back to treating a bare JSON string as the message, for non-compliant backends
+// that return errors like {"error": "some message"} instead.
+func (e *RPCError) UnmarshalJSON(b []byte) error {
+	type rpcErrorAlias RPCError
+	var obj rpcErrorAlias
+	if err := json.Unmarshal(b, &obj); err == nil {
+		*e = RPCError(obj)
+		return nil
+	}
+	var msg string
+	if err := json.Unmarshal(b, &msg); err != nil {
+		return err
+	}
+	e.Message = msg
+	return nil
+}
+
 func (e *RPCError) Error() error {
 	return errors.New(e.Message)
 }
