@@ -205,6 +205,27 @@ func TestSyncRPCCallErrorResponse(t *testing.T) {
 	assert.Regexp(t, "pop", err)
 }
 
+func TestSyncRPCCallErrorResponseStringError(t *testing.T) {
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Content-Type", "application/json")
+		w.WriteHeader(401)
+		w.Write([]byte(`{"error": "EXAMPLE: Unauthorized"}`))
+	}))
+	defer server.Close()
+
+	signerconfig.Reset()
+	prefix := signerconfig.BackendConfig
+	prefix.Set(ffresty.HTTPConfigURL, server.URL)
+	c, err := ffresty.New(context.Background(), signerconfig.BackendConfig)
+	assert.NoError(t, err)
+	rb := NewRPCClient(c).(*RPCClient)
+
+	var txCount ethtypes.HexInteger
+	rpcErr := rb.CallRPC(context.Background(), &txCount, "eth_getTransactionCount", ethtypes.MustNewAddress("0xfb075bb99f2aa4c49955bf703509a227d7a12248"), "pending")
+	assert.Regexp(t, "EXAMPLE: Unauthorized", rpcErr.Error())
+}
+
 func TestSyncRPCCallBadJSONResponse(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
