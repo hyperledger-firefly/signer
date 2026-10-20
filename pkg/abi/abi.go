@@ -738,6 +738,15 @@ func (e *Entry) topicToValue(ctx context.Context, topicIdx int, topic ethtypes.H
 		// Directly encoded into topic
 		return et.decodeABIData(ctx, fmt.Sprintf("topic[%d]", topicIdx), topic, 0, 0, input)
 	}
+	if et != nil && et.name == BaseTypeBytes && input.m > 0 {
+		// Fixed size bytes1-bytes32 are also directly encoded into the topic, right padded
+		// with zeros to 32 bytes, so read only the declared number of bytes rather than
+		// returning the whole topic
+		if len(topic) < 32 {
+			return nil, i18n.NewError(ctx, signermsgs.MsgNotEnoughBytesABIValue, input, fmt.Sprintf("topic[%d]", topicIdx))
+		}
+		return et.decodeABIData(ctx, fmt.Sprintf("topic[%d]", topicIdx), topic, 0, 0, input)
+	}
 	// For all other types it is just a hash of the output for indexing, so we can only
 	// logically return it as a hex string. The Solidity developer has to include
 	// the same data a second type non-indexed to get the real value.

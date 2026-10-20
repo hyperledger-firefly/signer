@@ -857,6 +857,70 @@ func TestDecodeEventMixed(t *testing.T) {
     }`, string(j))
 }
 
+func TestDecodeEventIndexedFixedBytes(t *testing.T) {
+	e := &Entry{
+		Type: Event,
+		Name: "MyEvent",
+		Inputs: ParameterArray{
+			{
+				Name:    "indexed1",
+				Type:    "bytes16",
+				Indexed: true,
+			},
+			{
+				Name:    "indexed2",
+				Type:    "bytes32",
+				Indexed: true,
+			},
+			{
+				Name:    "indexed3",
+				Type:    "bytes",
+				Indexed: true,
+			},
+			{
+				Name: "unindexed1",
+				Type: "bytes16",
+			},
+		},
+	}
+	v, err := e.DecodeEventData([]ethtypes.HexBytes0xPrefix{
+		e.SignatureHashBytes(),
+		ethtypes.MustNewHexBytes0xPrefix("0x0123456789abcdef0123456789abcdef00000000000000000000000000000000"),
+		ethtypes.MustNewHexBytes0xPrefix("0xfedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"),
+		ethtypes.MustNewHexBytes0xPrefix("0x592fa743889fc7f92ac2a37bb1f5ba1daf2a5c84741ca0e0061d243a2e6707ba"),
+	}, ethtypes.MustNewHexBytes0xPrefix("0x0123456789abcdef0123456789abcdef00000000000000000000000000000000"))
+	assert.NoError(t, err)
+
+	j, err := v.JSON()
+	assert.NoError(t, err)
+
+	assert.JSONEq(t, `{
+        "indexed1": "0123456789abcdef0123456789abcdef",
+        "indexed2": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+        "indexed3": "592fa743889fc7f92ac2a37bb1f5ba1daf2a5c84741ca0e0061d243a2e6707ba",
+        "unindexed1": "0123456789abcdef0123456789abcdef"
+    }`, string(j))
+}
+
+func TestDecodeEventIndexedFixedBytesShortTopic(t *testing.T) {
+	e := &Entry{
+		Name:      "MyEvent",
+		Type:      Event,
+		Anonymous: true,
+		Inputs: ParameterArray{
+			{
+				Name:    "bytes1",
+				Type:    "bytes16",
+				Indexed: true,
+			},
+		},
+	}
+	_, err := e.DecodeEventData([]ethtypes.HexBytes0xPrefix{
+		ethtypes.MustNewHexBytes0xPrefix("0x0123456789abcdef0123456789abcdef"),
+	}, ethtypes.HexBytes0xPrefix{})
+	assert.Regexp(t, "FF22047", err)
+}
+
 func TestDecodeEventBadABI(t *testing.T) {
 	e := &Entry{
 		Inputs: ParameterArray{
