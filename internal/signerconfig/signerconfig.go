@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger-firefly/common/pkg/httpserver"
 	"github.com/hyperledger-firefly/common/pkg/wsclient"
 	"github.com/hyperledger-firefly/signer/pkg/fswallet"
+	"github.com/hyperledger-firefly/signer/pkg/kmswallet"
 	"github.com/spf13/viper"
 )
 
@@ -31,6 +32,8 @@ var (
 	BackendChainID = ffc("backend.chainId")
 	// FileWalletEnabled if the Keystore V3 wallet is enabled
 	FileWalletEnabled = ffc("fileWallet.enabled")
+	// KMSWalletEnabled if the AWS KMS wallet is enabled
+	KMSWalletEnabled = ffc("kmsWallet.enabled")
 )
 
 var ServerConfig config.Section
@@ -41,9 +44,12 @@ var BackendConfig config.Section
 
 var FileWalletConfig config.Section
 
+var KMSWalletConfig config.Section
+
 func setDefaults() {
 	viper.SetDefault(string(BackendChainID), -1)
 	viper.SetDefault(string(FileWalletEnabled), true)
+	viper.SetDefault(string(KMSWalletEnabled), false)
 }
 
 func Reset() {
@@ -61,4 +67,6 @@ func Reset() {
 	FileWalletConfig = config.RootSection("fileWallet")
 	fswallet.InitConfig(FileWalletConfig)
 
+	KMSWalletConfig = config.RootSection("kmsWallet")
+	kmswallet.InitConfig(KMSWalletConfig)
 }

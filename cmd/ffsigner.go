@@ -30,6 +30,7 @@ import (
 	"github.com/hyperledger-firefly/signer/internal/signerconfig"
 	"github.com/hyperledger-firefly/signer/internal/signermsgs"
 	"github.com/hyperledger-firefly/signer/pkg/fswallet"
+	"github.com/hyperledger-firefly/signer/pkg/kmswallet"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -88,6 +89,18 @@ func run() error {
 		log.L(ctx).Infof("Shutting down due to %s", sig.String())
 		cancelCtx()
 	}()
+
+	if config.GetBool(signerconfig.KMSWalletEnabled) {
+		kmsWallet, err := kmswallet.NewKMSWallet(ctx, kmswallet.ReadConfig(signerconfig.KMSWalletConfig))
+		if err != nil {
+			return err
+		}
+		server, err := rpcserver.NewServer(ctx, kmsWallet)
+		if err != nil {
+			return err
+		}
+		return runServer(server)
+	}
 
 	if !config.GetBool(signerconfig.FileWalletEnabled) {
 		return i18n.NewError(ctx, signermsgs.MsgNoWalletEnabled)
